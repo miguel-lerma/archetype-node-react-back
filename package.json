@@ -1,9 +1,15 @@
 {
-  "name": "web-frontend",
+  "name": "api-backend",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "scripts": { "dev": "vite", "build": "vite build", "preview": "vite preview", "test": "echo \"(no tests yet)\" && exit 0" },
-  "dependencies": { "react": "^18.2.0", "react-dom": "^18.2.0" },
-  "devDependencies": { "vite": "^5.4.0", "@vitejs/plugin-react": "^4.3.0" }
+  "scripts": {
+    "dev": "node src/server.js",
+    "start": "node src/server.js",
+    "test": "node -e \"console.log('(no tests yet)')\" --"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5"
+  }
 }
