@@ -1,4 +1,4 @@
-name: Build & Test (FE)
+name: Build & Test (BE)
 on: { pull_request: { branches: [develop, staging, main] } }
 jobs:
   build:

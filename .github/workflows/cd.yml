@@ -1,6 +1,6 @@
-name: Deploy FE to ACA
+name: Deploy BE to ACA
 on: { push: { branches: [develop, staging, main] } }
-env: { REGISTRY: "${{ vars.AZ_ACR }}.azurecr.io", IMAGE_NAME: "${{ vars.IMAGE_NAME || 'web-frontend' }}" }
+env: { REGISTRY: "${{ vars.AZ_ACR }}.azurecr.io", IMAGE_NAME: "${{ vars.IMAGE_NAME || 'api-backend' }}" }
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -19,5 +19,5 @@ jobs:
           docker build -t $REGISTRY/$IMAGE_NAME:${{ steps.tag.outputs.tag }} .
           docker push $REGISTRY/$IMAGE_NAME:${{ steps.tag.outputs.tag }}
       - run: |
-          az containerapp create --name "${{ vars.APP_NAME }}" --resource-group "${{ vars.AZ_RESOURCE_GROUP }}" --environment "${{ vars.AZ_ACA_ENV }}" --location "${{ vars.AZ_LOCATION }}" --image "$REGISTRY/$IMAGE_NAME:${{ steps.tag.outputs.tag }}" --target-port "${{ vars.TARGET_PORT || 80 }}" --ingress external --registry-server "$REGISTRY" --query properties.provisioningState -o tsv || true
-          az containerapp update --name "${{ vars.APP_NAME }}" --resource-group "${{ vars.AZ_RESOURCE_GROUP }}" --image "$REGISTRY/$IMAGE_NAME:${{ steps.tag.outputs.tag }}" --set-env-vars "VITE_API_URL=${{ vars.VITE_API_URL }}" --query properties.latestRevisionName -o tsv
+          az containerapp create --name "${{ vars.APP_NAME }}" --resource-group "${{ vars.AZ_RESOURCE_GROUP }}" --environment "${{ vars.AZ_ACA_ENV }}" --location "${{ vars.AZ_LOCATION }}" --image "$REGISTRY/$IMAGE_NAME:${{ steps.tag.outputs.tag }}" --target-port "${{ vars.TARGET_PORT || 3000 }}" --ingress external --registry-server "$REGISTRY" --query properties.provisioningState -o tsv || true
+          az containerapp update --name "${{ vars.APP_NAME }}" --resource-group "${{ vars.AZ_RESOURCE_GROUP }}" --image "$REGISTRY/$IMAGE_NAME:${{ steps.tag.outputs.tag }}"
