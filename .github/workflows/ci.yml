@@ -1,0 +1,7 @@
+name: Build & Test (FE)
+on: { pull_request: { branches: [develop, staging, main] } }
+jobs:
+  build:
+    uses: miguel-lerma/pipelines/.github/workflows/build-node-react.yml@v1.0.0
+    with: { app_dir: . }
+    permissions: { contents: read }
