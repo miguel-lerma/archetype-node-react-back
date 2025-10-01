@@ -1,23 +1,66 @@
 name: Deploy BE to ACA
-on: { push: { branches: [develop, staging, main] } }
-env: { REGISTRY: "${{ vars.AZ_ACR }}.azurecr.io", IMAGE_NAME: "${{ vars.IMAGE_NAME || 'api-backend' }}" }
+
+on:
+  push:
+    branches:
+      - develop
+      - staging
+      - main
+  workflow_dispatch:
+
+env:
+  REGISTRY: ${{ vars.AZ_ACR }}.azurecr.io
+  # Si no definiste IMAGE_NAME como repo var, ponla en Settings → Variables (p.ej. api-backend)
+  IMAGE_NAME: ${{ vars.IMAGE_NAME || 'api-backend' }}
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: ${{ github.ref_name == 'main' && 'prd' || (github.ref_name == 'staging' && 'stg' || 'dev') }}
-    permissions: { contents: read, id-token: write }
+    # Mapea rama → Environment: develop→dev, staging→stg, main→prd
+    environment: ${{ github.ref_name == 'main' && 'prd' || github.ref_name == 'staging' && 'stg' || 'dev' }}
+    permissions:
+      contents: read
+      id-token: write
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: azure/login@v2
-        with: { creds: ${{ secrets.AZURE_CREDENTIALS }} }
-      - uses: azure/CLI@v2
-        with: { inlineScript: "az extension add -n containerapp --upgrade || true" }
-      - run: az acr login -n "${{ vars.AZ_ACR }}"
-      - id: tag
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Ensure Container Apps extension
+        uses: azure/CLI@v2
+        with:
+          inlineScript: |
+            az extension add -n containerapp --upgrade || true
+
+      - name: ACR login
+        run: az acr login -n "${{ vars.AZ_ACR }}"
+
+      - name: Compute image tag
+        id: tag
         run: echo "tag=${{ github.ref_name }}-${{ github.sha }}" >> "$GITHUB_OUTPUT"
-      - run: |
+
+      - name: Build & push image
+        run: |
           docker build -t $REGISTRY/$IMAGE_NAME:${{ steps.tag.outputs.tag }} .
           docker push $REGISTRY/$IMAGE_NAME:${{ steps.tag.outputs.tag }}
-      - run: |
-          az containerapp create --name "${{ vars.APP_NAME }}" --resource-group "${{ vars.AZ_RESOURCE_GROUP }}" --environment "${{ vars.AZ_ACA_ENV }}" --location "${{ vars.AZ_LOCATION }}" --image "$REGISTRY/$IMAGE_NAME:${{ steps.tag.outputs.tag }}" --target-port "${{ vars.TARGET_PORT || 3000 }}" --ingress external --registry-server "$REGISTRY" --query properties.provisioningState -o tsv || true
-          az containerapp update --name "${{ vars.APP_NAME }}" --resource-group "${{ vars.AZ_RESOURCE_GROUP }}" --image "$REGISTRY/$IMAGE_NAME:${{ steps.tag.outputs.tag }}"
+
+      - name: Create/Update Container App
+        run: |
+          # Asegura que exista el ACA Environment
+          az containerapp env show -n "${{ vars.AZ_ACA_ENV }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" >/dev/null 2>&1 \
+          || az containerapp env create -n "${{ vars.AZ_ACA_ENV }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" -l "${{ vars.AZ_LOCATION }}"
+
+          # Crea o actualiza la app
+          az containerapp show -n "${{ vars.APP_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" >/dev/null 2>&1 \
+          && az containerapp update -n "${{ vars.APP_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" \
+               --image "$REGISTRY/$IMAGE_NAME:${{ steps.tag.outputs.tag }}" \
+          || az containerapp create -n "${{ vars.APP_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" \
+               --environment "${{ vars.AZ_ACA_ENV }}" \
+               --image "$REGISTRY/$IMAGE_NAME:${{ steps.tag.outputs.tag }}" \
+               --ingress external \
+               --target-port "${{ vars.TARGET_PORT || 3000 }}"

@@ -1,0 +1,31 @@
+---
+name: Security (SCA/Secrets/CodeQL)
+
+on:
+  pull_request:
+    branches: [develop, staging, main]
+
+jobs:
+  gitleaks:
+    name: Gitleaks (secrets)
+    uses: miguel-lerma/pipelines/.github/workflows/gitleaks.yml@main
+    with:
+      app_dir: "."
+
+  trivy:
+    name: Trivy SCA (deps)
+    uses: miguel-lerma/pipelines/.github/workflows/trivy-sca.yml@main
+    with:
+      app_dir: "."
+      severity: "HIGH,CRITICAL"
+      ignore_unfixed: "true"
+      fail_on_findings: "true"
+
+  codeql:
+    name: CodeQL (warning)
+    uses: miguel-lerma/pipelines/.github/workflows/codeql.yml@main
+    with:
+      # Para Node/JS del backend
+      language: "javascript"
+      # En "warning" no rompe el build hasta que decidas endurecerlo
+      mode: "warning"
