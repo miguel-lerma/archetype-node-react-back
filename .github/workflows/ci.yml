@@ -1,7 +1,19 @@
+---
 name: Build & Test (BE)
-on: { pull_request: { branches: [develop, staging, main] } }
+
+on:
+  pull_request:
+    branches: [develop, staging, main]
+
 jobs:
   build:
-    uses: miguel-lerma/pipelines/.github/workflows/build-node-react.yml@v1.0.0
-    with: { app_dir: . }
-    permissions: { contents: read }
+    uses: miguel-lerma/pipelines/.github/workflows/build-node-api.yml@main
+    with:
+      app_dir: "."
+      # Si NO tienes .nvmrc, destapa la línea de abajo:
+      # node_version: "20"
+      run_lint: true
+      run_test: true
+      run_build: false
+    permissions:
+      contents: read
