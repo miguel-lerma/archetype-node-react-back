@@ -22,16 +22,10 @@ jobs:
       fail_on_findings: "true"
 
   codeql:
-    name: CodeQL (java)
+    name: CodeQL (warning)
     uses: miguel-lerma/pipelines/.github/workflows/codeql.yml@main
     with:
-      # Si sólo es Java:
-      language: "java"
-
-      # Si necesitas compilar manualmente (monorepo, perfiles, etc),
-      # activa estas 2 líneas y comenta Autobuild en pipelines, o deja ambas (pipelines respeta run_build):
-      # run_build: true
-      # build_command: |
-      #   sudo apt-get update -y
-      #   sudo apt-get install -y maven
-      #   mvn -B -DskipTests package
+      # Para Node/JS del backend
+      language: "javascript"
+      # En "warning" no rompe el build hasta que decidas endurecerlo
+      mode: "warning"
