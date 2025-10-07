@@ -1,9 +1,16 @@
 {
-  "name": "web-frontend",
-  "private": true,
-  "version": "0.1.0",
+  "name": "dummy-backend",
+  "version": "1.0.0",
   "type": "module",
-  "scripts": { "dev": "vite", "build": "vite build", "preview": "vite preview", "test": "echo \"(no tests yet)\" && exit 0" },
-  "dependencies": { "react": "^18.2.0", "react-dom": "^18.2.0" },
-  "devDependencies": { "vite": "^5.4.0", "@vitejs/plugin-react": "^4.3.0" }
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "morgan": "^1.10.0",
+    "helmet": "^7.1.0",
+    "dotenv": "^16.4.5"
+  }
 }
