@@ -1,7 +1,18 @@
-name: Build & Test (FE)
-on: { pull_request: { branches: [develop, staging, main] } }
+---
+name: Build & Test (BE)
+
+on:
+  pull_request:
+    branches: [develop, staging, main]
+
 jobs:
   build:
-    uses: miguel-lerma/pipelines/.github/workflows/build-node-react.yml@v1.0.0
-    with: { app_dir: . }
-    permissions: { contents: read }
+    uses: miguel-lerma/pipelines/.github/workflows/build-node-api.yml@main
+    with:
+      app_dir: "."
+      node_version: "20.x"   # Fallback si no hay .nvmrc
+      run_lint: true
+      run_test: true
+      run_build: false
+    permissions:
+      contents: read
