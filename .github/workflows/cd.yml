@@ -2,7 +2,7 @@ name: CD - Deploy to Azure Container Apps
 
 on:
   push:
-    branches: [ "develop" ]
+    branches: ["develop"]
   workflow_dispatch:
 
 env:
@@ -19,16 +19,16 @@ env:
 
   # Config de la app
   CPU: "0.25"
-  MEMORY: "0.5Gi"        # <- Requerido por CLI: unidad en Gi
+  MEMORY: "0.5Gi"         # CLI exige sufijo Gi
   MIN_REPLICAS: "0"
   MAX_REPLICAS: "1"
-  TARGET_PORT: "8080"     # Puerto del contenedor
-  APP_PORT: "8080"        # Si tu app lee PORT, mantenlo igual
+  TARGET_PORT: "8080"      # Puerto expuesto por el contenedor
+  APP_PORT: "8080"         # Si tu app lee PORT, mantenlo igual
   APP_ENV: "dev"
   ALLOW_ORIGIN: "*"
 
 permissions:
-  id-token: write   # necesario para OIDC con azure/login
+  id-token: write   # requerido para OIDC con azure/login
   contents: read
 
 jobs:
@@ -83,7 +83,6 @@ jobs:
             TOKEN=$(az acr login --name "${ACR_NAME}" --expose-token --query accessToken -o tsv)
             echo "$TOKEN" | docker login "${REGISTRY}" -u 00000000-0000-0000-0000-000000000000 --password-stdin
           fi
-          # Pequeña espera para evitar race conditions con el push
           sleep 5
 
       - name: Build & Push image
@@ -112,7 +111,6 @@ jobs:
             echo "ACA_ENV_NAME is empty. Set it in Environment variables." >&2
             exit 1
           fi
-          # Crea el entorno si no existe (idempotente)
           az containerapp env show \
             -n "${ACA_ENV_NAME}" -g "${RESOURCE_GROUP}" >/dev/null 2>&1 || \
           az containerapp env create \
@@ -148,10 +146,7 @@ jobs:
               --set-env-vars APP_ENV="${APP_ENV}" PORT="${APP_PORT}" ALLOW_ORIGIN="${ALLOW_ORIGIN}"
           fi
 
-      # Nota: Estás usando identidad administrada del Container App para jalar de ACR.
-      # Ya que optaste por la Opción A (rol manual), asegúrate de que la identidad
-      # del Container App tenga 'acrpull' en el ACR. Si actualizas identidades,
-      # puedes reactivar la línea de abajo:
-      #
-      # - name: Restart revision (si cambiaste permisos recientemente)
+      # Si acabas de otorgar 'acrpull' a la identidad del Container App sobre el ACR,
+      # podrías necesitar reiniciar la revisión:
+      # - name: Restart revision (opcional)
       #   run: az containerapp revision restart -n "${ACA_NAME}" -g "${RESOURCE_GROUP}"
