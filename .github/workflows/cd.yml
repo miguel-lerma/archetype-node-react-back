@@ -6,8 +6,10 @@ on:
   workflow_dispatch:
 
 env:
-  REGISTRY: ${{ vars.AZURE_CONTAINER_REGISTRY }}   # p.ej. itxzacrlab01.azurecr.io
-  IMAGE_NAME: ${{ vars.IMAGE_NAME }}               # p.ej. api-backend
+  # FQDN del ACR (login server), define esto en GitHub Environments (dev/stg/prd)
+  REGISTRY: ${{ vars.AZURE_CONTAINER_REGISTRY }}
+  # Nombre del repo de imagen (p.ej. api-backend) también en Environments
+  IMAGE_NAME: ${{ vars.IMAGE_NAME }}
 
 jobs:
   deploy:
@@ -35,8 +37,24 @@ jobs:
           inlineScript: |
             az extension add -n containerapp --upgrade || true
 
-      - name: ACR login
-        run: az acr login -n "${{ vars.ACR_NAME }}"
+      # Deriva el nombre corto del ACR desde el FQDN si no se definió ACR_NAME,
+      # y falla temprano si no existe en el RG esperado.
+      - name: Resolve ACR name and assert existence
+        id: acr
+        run: |
+          REG="${{ env.REGISTRY }}"
+          if [ -z "${{ vars.ACR_NAME }}" ] || [ "${{ vars.ACR_NAME }}" = "" ]; then
+            ACR_NAME="${REG%%.azurecr.io}"
+          else
+            ACR_NAME="${{ vars.ACR_NAME }}"
+          fi
+          echo "acr_name=$ACR_NAME" >> "$GITHUB_OUTPUT"
+
+          echo "Checking ACR '$ACR_NAME' in RG '${{ vars.AZ_RESOURCE_GROUP }}'..."
+          az acr show -n "$ACR_NAME" -g "${{ vars.AZ_RESOURCE_GROUP }}" 1>/dev/null
+
+      - name: ACR login (AAD)
+        run: az acr login -n "${{ steps.acr.outputs.acr_name }}"
 
       - name: Compute image tag
         id: tag
@@ -50,55 +68,68 @@ jobs:
       - name: Ensure ACA Environment exists
         run: |
           az containerapp env show \
-            -n "${{ vars.AZ_ACA_ENV_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" >/dev/null 2>&1 || \
+            -n "${{ vars.AZ_ACA_ENV_NAME }}" \
+            -g "${{ vars.AZ_RESOURCE_GROUP }}" >/dev/null 2>&1 || \
           az containerapp env create \
-            -n "${{ vars.AZ_ACA_ENV_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" -l "${{ vars.AZ_LOCATION }}"
+            -n "${{ vars.AZ_ACA_ENV_NAME }}" \
+            -g "${{ vars.AZ_RESOURCE_GROUP }}" \
+            -l "${{ vars.AZ_LOCATION }}"
 
-      - name: Create/Update Container App (cheap defaults)
+      - name: Create/Update Container App (system identity + ACR)
         env:
           IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}
         run: |
-          # Defaults súper baratos si no existen en el Environment
-          CPU="${{ vars.CPU || '0.25' }}"
-          MEMORY="${{ vars.MEMORY || '512Mi' }}"
-          MIN_REP="${{ vars.MIN_REPLICAS || '0' }}"
-          MAX_REP="${{ vars.MAX_REPLICAS || '1' }}"
-          HTTP_CONC="${{ vars.HTTP_CONCURRENCY || '100' }}"
-          INGRESS="${{ vars.INGRESS || 'external' }}"
-          # Mantén mismo puerto en target-port y PORT de la app
-          TP="${{ vars.TARGET_PORT || '8080' }}"
-          BP="${{ vars.BACK_PORT || '8080' }}"
+          # Crea si no existe; por ahora ingress external para validar rápido
+          if ! az containerapp show \
+              -n "${{ vars.APP_NAME }}" \
+              -g "${{ vars.AZ_RESOURCE_GROUP }}" >/dev/null 2>&1; then
 
-          if ! az containerapp show -n "${{ vars.APP_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" >/dev/null 2>&1; then
             az containerapp create \
-              -n "${{ vars.APP_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" \
+              -n "${{ vars.APP_NAME }}" \
+              -g "${{ vars.AZ_RESOURCE_GROUP }}" \
               --environment "${{ vars.AZ_ACA_ENV_NAME }}" \
               --image "$IMG" \
-              --ingress "$INGRESS" --target-port "$TP" \
-              --registry-server "${{ vars.AZURE_CONTAINER_REGISTRY }}" \
+              --ingress external \
+              --target-port "${{ vars.TARGET_PORT }}" \
+              --registry-server "${{ env.REGISTRY }}" \
               --registry-identity system \
               --system-assigned \
-              --cpu "$CPU" --memory "$MEMORY" \
-              --min-replicas "$MIN_REP" --max-replicas "$MAX_REP" \
-              --scale-rule-name http --scale-rule-http-concurrency "$HTTP_CONC" \
-              --set-env-vars APP_ENV="${{ vars.APP_ENV }}" PORT="$BP" ALLOW_ORIGIN="${{ vars.ALLOW_ORIGIN || '*' }}"
+              --set-env-vars \
+                APP_ENV="${{ vars.APP_ENV }}" \
+                PORT="${{ vars.BACK_PORT }}" \
+                ALLOW_ORIGIN="${{ vars.ALLOW_ORIGIN || '*' }}"
           else
             az containerapp update \
-              -n "${{ vars.APP_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" \
+              -n "${{ vars.APP_NAME }}" \
+              -g "${{ vars.AZ_RESOURCE_GROUP }}" \
               --image "$IMG" \
-              --cpu "$CPU" --memory "$MEMORY" \
-              --min-replicas "$MIN_REP" --max-replicas "$MAX_REP" \
-              --scale-rule-name http --scale-rule-http-concurrency "$HTTP_CONC" \
-              --set-env-vars APP_ENV="${{ vars.APP_ENV }}" PORT="$BP" ALLOW_ORIGIN="${{ vars.ALLOW_ORIGIN || '*' }}"
+              --set-env-vars \
+                APP_ENV="${{ vars.APP_ENV }}" \
+                PORT="${{ vars.BACK_PORT }}" \
+                ALLOW_ORIGIN="${{ vars.ALLOW_ORIGIN || '*' }}"
           fi
 
       - name: Grant AcrPull to app's managed identity (idempotent)
         run: |
-          APP_MI=$(az containerapp show -n "${{ vars.APP_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" --query identity.principalId -o tsv)
-          ACR_ID=$(az acr show -n "${{ vars.ACR_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" --query id -o tsv)
-          az role assignment create --assignee "$APP_MI" --role "AcrPull" --scope "$ACR_ID" >/dev/null 2>&1 || true
+          APP_MI=$(az containerapp show \
+            -n "${{ vars.APP_NAME }}" \
+            -g "${{ vars.AZ_RESOURCE_GROUP }}" \
+            --query identity.principalId -o tsv)
+
+          ACR_ID=$(az acr show \
+            -n "${{ steps.acr.outputs.acr_name }}" \
+            -g "${{ vars.AZ_RESOURCE_GROUP }}" \
+            --query id -o tsv)
+
+          az role assignment create \
+            --assignee "$APP_MI" \
+            --role "AcrPull" \
+            --scope "$ACR_ID" >/dev/null 2>&1 || true
 
       - name: Output URL
         run: |
-          URL=$(az containerapp show -n "${{ vars.APP_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" --query properties.configuration.ingress.fqdn -o tsv)
+          URL=$(az containerapp show \
+            -n "${{ vars.APP_NAME }}" \
+            -g "${{ vars.AZ_RESOURCE_GROUP }}" \
+            --query properties.configuration.ingress.fqdn -o tsv)
           echo "Backend URL: https://$URL"
