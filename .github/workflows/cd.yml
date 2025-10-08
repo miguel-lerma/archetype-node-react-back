@@ -6,9 +6,7 @@ on:
   workflow_dispatch:
 
 env:
-  # Usa el login server que ya definiste en el Environment (ej. itxzacrlab01.azurecr.io)
-  REGISTRY: ${{ vars.ACR_LOGIN_SERVER }}
-  # Si no existe la var, usamos un valor por defecto
+  REGISTRY: ${{ vars.ACR_LOGIN_SERVER }}              # ej: itxzacrlab01.azurecr.io
   IMAGE_NAME: ${{ vars.IMAGE_NAME || 'archetype-back' }}
 
 jobs:
@@ -37,11 +35,23 @@ jobs:
           inlineScript: |
             az extension add -n containerapp --upgrade || true
 
-      # (Opcional) Verificación amable de que el ACR existe y el SP puede leerlo
       - name: Check ACR visibility
         run: |
           echo "Checking ACR '${{ vars.ACR_NAME }}' in RG '${{ vars.AZ_RESOURCE_GROUP }}'..."
           az acr show -n "${{ vars.ACR_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" 1>/dev/null
+
+      # 🔐 Login a Docker en ACR usando token de ACR (no admin user)
+      - name: Login to ACR with access token (OIDC)
+        run: |
+          for i in {1..5}; do
+            TOKEN=$(az acr login --name "${{ vars.ACR_NAME }}" --expose-token --query accessToken -o tsv) && \
+            echo "$TOKEN" | docker login "${{ env.REGISTRY }}" -u 00000000-0000-0000-0000-000000000000 --password-stdin && \
+            exit 0
+            echo "Retry $i: waiting for role propagation..."
+            sleep 10
+          done
+          echo "Failed to login to ACR"
+          exit 1
 
       - name: Compute image tag
         id: tag
@@ -65,7 +75,6 @@ jobs:
         env:
           IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}
         run: |
-          # Crea si no existe (external por ahora; luego podrás cambiar a interno)
           if ! az containerapp show -n "${{ vars.APP_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" >/dev/null 2>&1; then
             az containerapp create \
               -n "${{ vars.APP_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" \
