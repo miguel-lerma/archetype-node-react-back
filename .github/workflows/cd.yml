@@ -57,7 +57,6 @@ jobs:
             echo "$TOKEN" | docker login "${{ env.REGISTRY }}" \
               -u 00000000-0000-0000-0000-000000000000 --password-stdin
           fi
-          # Pequeña espera por propagación de permisos
           sleep 5
 
       - name: Build & push image (with retries)
@@ -79,16 +78,20 @@ jobs:
 
       - name: Ensure ACA Environment exists
         run: |
+          if [ -z "${{ vars.ACA_ENV_NAME }}" ]; then
+            echo "ACA_ENV_NAME is empty. Set it in Environment variables." >&2
+            exit 1
+          fi
           az containerapp env show \
-            -n "${{ vars.AZ_ACA_ENV_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" >/dev/null 2>&1 || \
+            -n "${{ vars.ACA_ENV_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" >/dev/null 2>&1 || \
           az containerapp env create \
-            -n "${{ vars.AZ_ACA_ENV_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" -l "${{ vars.AZ_LOCATION }}"
+            -n "${{ vars.ACA_ENV_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" -l "${{ vars.AZ_LOCATION }}"
 
       - name: Create/Update Container App (system identity + ACR)
         env:
           IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}
           CPU: ${{ vars.CPU || '0.25' }}
-          MEMORY: ${{ vars.MEMORY || '0.5Gi' }}
+          MEMORY: ${{ vars.MEMORY || '512Mi' }}
           MINR: ${{ vars.MIN_REPLICAS || '0' }}
           MAXR: ${{ vars.MAX_REPLICAS || '1' }}
           TPORT: ${{ vars.TARGET_PORT || '8080' }}
@@ -96,11 +99,10 @@ jobs:
           APPENV: ${{ vars.APP_ENV || 'dev' }}
           ALLOW: ${{ vars.ALLOW_ORIGIN || '*' }}
         run: |
-          # Crea si no existe; por ahora ingress external (luego lo ajustamos)
           if ! az containerapp show -n "${{ vars.APP_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" >/dev/null 2>&1; then
             az containerapp create \
               -n "${{ vars.APP_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" \
-              --environment "${{ vars.AZ_ACA_ENV_NAME }}" \
+              --environment "${{ vars.ACA_ENV_NAME }}" \
               --image "$IMG" \
               --ingress external --target-port "$TPORT" \
               --registry-server "${{ env.REGISTRY }}" \
@@ -108,14 +110,14 @@ jobs:
               --system-assigned \
               --cpu "$CPU" --memory "$MEMORY" \
               --min-replicas "$MINR" --max-replicas "$MAXR" \
-              --set-env-vars APP_ENV="$APPENV" PORT="$BPORT" ALLOW_ORIGIN="$ALLOW"
+              --env-vars APP_ENV="$APPENV" PORT="$BPORT" ALLOW_ORIGIN="$ALLOW"
           else
             az containerapp update \
               -n "${{ vars.APP_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" \
               --image "$IMG" \
               --cpu "$CPU" --memory "$MEMORY" \
               --min-replicas "$MINR" --max-replicas "$MAXR" \
-              --set-env-vars APP_ENV="$APPENV" PORT="$BPORT" ALLOW_ORIGIN="$ALLOW"
+              --env-vars APP_ENV="$APPENV" PORT="$BPORT" ALLOW_ORIGIN="$ALLOW"
           fi
 
       - name: Grant AcrPull to app's managed identity (idempotent)
