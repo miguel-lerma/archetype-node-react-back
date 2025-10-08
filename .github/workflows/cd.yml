@@ -7,7 +7,7 @@ on:
 
 env:
   # FQDN del ACR (login server), define esto en GitHub Environments (dev/stg/prd)
-  REGISTRY: ${{ vars.AZURE_CONTAINER_REGISTRY }}
+  REGISTRY: ${{ vars.ACR_LOGIN_SERVER }}
   # Nombre del repo de imagen (p.ej. api-backend) también en Environments
   IMAGE_NAME: ${{ vars.IMAGE_NAME }}
 
