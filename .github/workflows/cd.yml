@@ -2,21 +2,17 @@ name: Deploy BE to ACA
 
 on:
   push:
-    branches:
-      - develop
-      - staging
-      - main
+    branches: [develop, staging, main]
   workflow_dispatch:
 
 env:
-  REGISTRY: ${{ vars.AZ_ACR }}.azurecr.io
-  # Si no definiste IMAGE_NAME como repo var, ponla en Settings → Variables (p.ej. api-backend)
-  IMAGE_NAME: ${{ vars.IMAGE_NAME || 'api-backend' }}
+  REGISTRY: ${{ vars.AZURE_CONTAINER_REGISTRY }}   # p.ej. itxzacrlab01.azurecr.io
+  IMAGE_NAME: ${{ vars.IMAGE_NAME }}               # p.ej. api-backend
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # Mapea rama → Environment: develop→dev, staging→stg, main→prd
+    # develop→dev, staging→stg, main→prd
     environment: ${{ github.ref_name == 'main' && 'prd' || github.ref_name == 'staging' && 'stg' || 'dev' }}
     permissions:
       contents: read
@@ -26,10 +22,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Azure login
+      - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Ensure Container Apps extension
         uses: azure/CLI@v2
@@ -38,7 +36,7 @@ jobs:
             az extension add -n containerapp --upgrade || true
 
       - name: ACR login
-        run: az acr login -n "${{ vars.AZ_ACR }}"
+        run: az acr login -n "${{ vars.ACR_NAME }}"
 
       - name: Compute image tag
         id: tag
@@ -49,18 +47,58 @@ jobs:
           docker build -t $REGISTRY/$IMAGE_NAME:${{ steps.tag.outputs.tag }} .
           docker push $REGISTRY/$IMAGE_NAME:${{ steps.tag.outputs.tag }}
 
-      - name: Create/Update Container App
+      - name: Ensure ACA Environment exists
         run: |
-          # Asegura que exista el ACA Environment
-          az containerapp env show -n "${{ vars.AZ_ACA_ENV }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" >/dev/null 2>&1 \
-          || az containerapp env create -n "${{ vars.AZ_ACA_ENV }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" -l "${{ vars.AZ_LOCATION }}"
+          az containerapp env show \
+            -n "${{ vars.AZ_ACA_ENV_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" >/dev/null 2>&1 || \
+          az containerapp env create \
+            -n "${{ vars.AZ_ACA_ENV_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" -l "${{ vars.AZ_LOCATION }}"
 
-          # Crea o actualiza la app
-          az containerapp show -n "${{ vars.APP_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" >/dev/null 2>&1 \
-          && az containerapp update -n "${{ vars.APP_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" \
-               --image "$REGISTRY/$IMAGE_NAME:${{ steps.tag.outputs.tag }}" \
-          || az containerapp create -n "${{ vars.APP_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" \
-               --environment "${{ vars.AZ_ACA_ENV }}" \
-               --image "$REGISTRY/$IMAGE_NAME:${{ steps.tag.outputs.tag }}" \
-               --ingress external \
-               --target-port "${{ vars.TARGET_PORT || 3000 }}"
+      - name: Create/Update Container App (cheap defaults)
+        env:
+          IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}
+        run: |
+          # Defaults súper baratos si no existen en el Environment
+          CPU="${{ vars.CPU || '0.25' }}"
+          MEMORY="${{ vars.MEMORY || '512Mi' }}"
+          MIN_REP="${{ vars.MIN_REPLICAS || '0' }}"
+          MAX_REP="${{ vars.MAX_REPLICAS || '1' }}"
+          HTTP_CONC="${{ vars.HTTP_CONCURRENCY || '100' }}"
+          INGRESS="${{ vars.INGRESS || 'external' }}"
+          # Mantén mismo puerto en target-port y PORT de la app
+          TP="${{ vars.TARGET_PORT || '8080' }}"
+          BP="${{ vars.BACK_PORT || '8080' }}"
+
+          if ! az containerapp show -n "${{ vars.APP_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" >/dev/null 2>&1; then
+            az containerapp create \
+              -n "${{ vars.APP_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" \
+              --environment "${{ vars.AZ_ACA_ENV_NAME }}" \
+              --image "$IMG" \
+              --ingress "$INGRESS" --target-port "$TP" \
+              --registry-server "${{ vars.AZURE_CONTAINER_REGISTRY }}" \
+              --registry-identity system \
+              --system-assigned \
+              --cpu "$CPU" --memory "$MEMORY" \
+              --min-replicas "$MIN_REP" --max-replicas "$MAX_REP" \
+              --scale-rule-name http --scale-rule-http-concurrency "$HTTP_CONC" \
+              --set-env-vars APP_ENV="${{ vars.APP_ENV }}" PORT="$BP" ALLOW_ORIGIN="${{ vars.ALLOW_ORIGIN || '*' }}"
+          else
+            az containerapp update \
+              -n "${{ vars.APP_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" \
+              --image "$IMG" \
+              --cpu "$CPU" --memory "$MEMORY" \
+              --min-replicas "$MIN_REP" --max-replicas "$MAX_REP" \
+              --scale-rule-name http --scale-rule-http-concurrency "$HTTP_CONC" \
+              --set-env-vars APP_ENV="${{ vars.APP_ENV }}" PORT="$BP" ALLOW_ORIGIN="${{ vars.ALLOW_ORIGIN || '*' }}"
+          fi
+
+      - name: Grant AcrPull to app's managed identity (idempotent)
+        run: |
+          APP_MI=$(az containerapp show -n "${{ vars.APP_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" --query identity.principalId -o tsv)
+          ACR_ID=$(az acr show -n "${{ vars.ACR_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" --query id -o tsv)
+          az role assignment create --assignee "$APP_MI" --role "AcrPull" --scope "$ACR_ID" >/dev/null 2>&1 || true
+
+      - name: Output URL
+        run: |
+          URL=$(az containerapp show -n "${{ vars.APP_NAME }}" -g "${{ vars.AZ_RESOURCE_GROUP }}" --query properties.configuration.ingress.fqdn -o tsv)
+          echo "Backend URL: https://$URL"
