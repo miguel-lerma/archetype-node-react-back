@@ -10,6 +10,12 @@ on:
   workflow_dispatch:
 
 env:
+  # 🔐 Variables que vienen desde el Environment (no secrets)
+  AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+  AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+  # ⚙️ Configuración base
   ACR_NAME: itxzacrlab01
   REGISTRY: itxzacrlab01.azurecr.io
   IMAGE_NAME: archetype-back
@@ -28,25 +34,26 @@ env:
 
 permissions:
   contents: read
-  id-token: write  # para OIDC
+  id-token: write  # OIDC habilitado
 
 jobs:
   deploy:
     runs-on: ubuntu-24.04
     environment: dev
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verificar vars mínimas
+      - name: Validar variables requeridas
         shell: bash
         run: |
           set -euo pipefail
           for v in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID ACR_NAME REGISTRY RESOURCE_GROUP ACA_ENV_NAME ACA_NAME LOCATION; do
-            if [ -z "${!v:-}" ]; then echo "Falta variable: $v"; exit 1; fi
+            if [ -z "${!v:-}" ]; then echo "❌ Falta variable: $v"; exit 1; fi
           done
 
-      - name: Azure login (OIDC)
+      - name: Login en Azure (OIDC)
         uses: azure/login@v2
         with:
           client-id: ${{ env.AZURE_CLIENT_ID }}
@@ -60,17 +67,16 @@ jobs:
           inlineScript: |
             az extension add -n containerapp --upgrade || true
 
-      - name: Comprobar ACR
+      - name: Verificar existencia del ACR
         shell: bash
         run: |
-          echo "Checking ACR '${ACR_NAME}' in RG '${RESOURCE_GROUP}'..."
+          echo "🔍 Verificando ACR '${ACR_NAME}' en RG '${RESOURCE_GROUP}'..."
           az acr show -n "${ACR_NAME}" -g "${RESOURCE_GROUP}" 1>/dev/null
 
       - name: Calcular tag e imagen
         id: meta
         shell: bash
         run: |
-          set -euo pipefail
           SHA="$(git rev-parse --short=40 HEAD)"
           TAG="develop-${SHA}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
@@ -81,44 +87,38 @@ jobs:
         run: |
           set -euo pipefail
           if az acr login --name "${ACR_NAME}"; then
-            echo "ACR login (standard) OK"
+            echo "✅ Login ACR correcto (standard)"
           else
-            echo "Standard ACR login failed. Falling back to token..."
+            echo "⚠️ Login ACR standard falló; usando token temporal..."
             TOKEN=$(az acr login --name "${ACR_NAME}" --expose-token --query accessToken -o tsv)
             echo "$TOKEN" | docker login "${REGISTRY}" -u 00000000-0000-0000-0000-000000000000 --password-stdin
           fi
-          sleep 3
 
-      - name: Build & Push
+      - name: Build & Push imagen
         env:
           IMG: ${{ steps.meta.outputs.image }}
         shell: bash
         run: |
           set -euo pipefail
-          echo "Building ${IMG}"
+          echo "🏗️ Construyendo ${IMG}"
           docker build -t "${IMG}" .
           for i in {1..3}; do
             if docker push "${IMG}"; then
-              echo "Pushed ${IMG}"
+              echo "🚀 Imagen enviada correctamente: ${IMG}"
               exit 0
             fi
-            echo "Push retry ${i}..."
+            echo "⏳ Reintentando push (${i})..."
             sleep 10
           done
-          echo "Push failed after retries"; exit 1
+          echo "❌ Falló el push tras 3 intentos"; exit 1
 
-      - name: Crear ACA env si no existe
+      - name: Crear env ACA si no existe
         shell: bash
         run: |
-          set -euo pipefail
-          if [ -z "${ACA_ENV_NAME}" ]; then
-            echo "ACA_ENV_NAME is empty. Set it in Environment variables." >&2
-            exit 1
-          fi
           az containerapp env show -n "${ACA_ENV_NAME}" -g "${RESOURCE_GROUP}" >/dev/null 2>&1 || \
           az containerapp env create -n "${ACA_ENV_NAME}" -g "${RESOURCE_GROUP}" -l "${LOCATION}"
 
-      - name: Asegurar identidad y permisos ACR (solo alcance ACR)
+      - name: Asegurar identidad y rol AcrPull con scope al ACR
         env:
           IMG: ${{ steps.meta.outputs.image }}
         shell: bash
@@ -129,30 +129,33 @@ jobs:
           if az containerapp show -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" >/dev/null 2>&1; then
             CA_MI=$(az containerapp show -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" --query "identity.principalId" -o tsv)
             if [ -z "${CA_MI}" ] || [ "${CA_MI}" = "None" ]; then
-              echo "Asignando identidad system a ${ACA_NAME}..."
+              echo "🆔 Asignando identidad system a ${ACA_NAME}..."
               az containerapp identity assign -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" --system-assigned >/dev/null
               CA_MI=$(az containerapp show -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" --query "identity.principalId" -o tsv)
             fi
 
-            # Rol AcrPull en el scope del ACR
             HAS_ROLE=$(az role assignment list --assignee "${CA_MI}" --role "AcrPull" --scope "${ACR_ID}" --query "length(@)" -o tsv)
             if [ "${HAS_ROLE}" = "0" ]; then
-              echo "Asignando rol AcrPull a la MI de la app en el ACR..."
-              az role assignment create --assignee-object-id "${CA_MI}" --assignee-principal-type ServicePrincipal --role "AcrPull" --scope "${ACR_ID}" >/dev/null
+              echo "🔐 Asignando rol AcrPull en el ACR..."
+              az role assignment create \
+                --assignee-object-id "${CA_MI}" \
+                --assignee-principal-type ServicePrincipal \
+                --role "AcrPull" \
+                --scope "${ACR_ID}" >/dev/null
             else
-              echo "Rol AcrPull ya presente."
+              echo "✅ Rol AcrPull ya asignado."
             fi
 
-            # ✅ Comprobación null-safe del registry (sin length())
+            # Null-safe check del registry
             REG_SERVERS="$(az containerapp show -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" --query "configuration.registries[].server" -o tsv 2>/dev/null || true)"
             if echo "${REG_SERVERS}" | grep -qx "${REGISTRY}"; then
-              echo "Registry ya enlazado; se deja igual para evitar nueva revisión."
+              echo "🔁 Registry ya enlazado, sin cambios."
             else
-              echo "Enlazando registry por primera vez..."
+              echo "🔗 Enlazando registry por primera vez..."
               az containerapp registry set -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" --server "${REGISTRY}" --identity system >/dev/null
             fi
           else
-            echo "La app aún no existe; se configurará en create."
+            echo "ℹ️ La app no existe aún; se configurará en el paso de creación."
           fi
 
       - name: Crear/Actualizar Container App
@@ -162,19 +165,20 @@ jobs:
         run: |
           set -euo pipefail
           if ! az containerapp show -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" >/dev/null 2>&1; then
-            echo "Creando ${ACA_NAME}..."
+            echo "🆕 Creando ${ACA_NAME}..."
             az containerapp create \
               -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" -l "${LOCATION}" \
               --environment "${ACA_ENV_NAME}" \
               --image "${IMG}" \
-              --target-port "${TARGET_PORT}" --ingress external \
+              --target-port "${TARGET_PORT}" \
+              --ingress internal \    # 👈 Backend interno
               --cpu "${CPU}" --memory "${MEMORY}" \
               --min-replicas "${MIN_REPLICAS}" --max-replicas "${MAX_REPLICAS}" \
               --system-assigned \
               --registry-server "${REGISTRY}" --registry-identity system \
               --env-vars APP_PORT="${APP_PORT}" APP_ENV="${APP_ENV}" ALLOW_ORIGIN="${ALLOW_ORIGIN}"
           else
-            echo "Actualizando imagen de ${ACA_NAME}..."
+            echo "♻️ Actualizando ${ACA_NAME}..."
             az containerapp update \
               -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" \
               --image "${IMG}" \
@@ -184,4 +188,5 @@ jobs:
       - name: Mostrar revisión desplegada
         shell: bash
         run: |
-          az containerapp show -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" --query "properties.latestRevisionName" -o tsv
+          REV=$(az containerapp show -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" --query "properties.latestRevisionName" -o tsv)
+          echo "✅ Despliegue exitoso. Última revisión: ${REV}"
