@@ -157,19 +157,19 @@ jobs:
             echo "La app aún no existe; se configurará en create."
           fi
 
-      - name: Create or update Container App
+      - name: Create or update Container App (INGRESS INTERNAL)
         shell: bash
         env:
           IMG: ${{ steps.meta.outputs.image }}
         run: |
           set -euo pipefail
           if ! az containerapp show -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" >/dev/null 2>&1; then
-            echo "Creating Container App '${ACA_NAME}'..."
+            echo "Creating Container App '${ACA_NAME}' (internal ingress)..."
             az containerapp create \
               -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" \
               --environment "${ACA_ENV_NAME}" \
               --image "${IMG}" \
-              --ingress external --target-port "${TARGET_PORT}" \
+              --ingress internal --target-port "${TARGET_PORT}" \
               --registry-server "${REGISTRY}" \
               --registry-identity system \
               --system-assigned \
@@ -177,12 +177,19 @@ jobs:
               --min-replicas "${MIN_REPLICAS}" --max-replicas "${MAX_REPLICAS}" \
               --env-vars APP_ENV="${APP_ENV}" PORT="${APP_PORT}" ALLOW_ORIGIN="${ALLOW_ORIGIN}"
           else
-            echo "Updating Container App '${ACA_NAME}'..."
+            echo "Updating Container App '${ACA_NAME}' (internal ingress)..."
             az containerapp update \
               -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" \
               --image "${IMG}" \
+              --ingress internal --target-port "${TARGET_PORT}" \
               --cpu "${CPU}" --memory "${MEMORY}" \
               --min-replicas "${MIN_REPLICAS}" --max-replicas "${MAX_REPLICAS}" \
               --set-env-vars APP_ENV="${APP_ENV}" PORT="${APP_PORT}" ALLOW_ORIGIN="${ALLOW_ORIGIN}"
-              # La vinculación de registry/identity ya se hizo en el preflight
           fi
+
+      - name: Mostrar FQDN interno del BE
+        shell: bash
+        run: |
+          echo -n "FQDN interno: "
+          az containerapp show -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" \
+            --query "properties.configuration.ingress.fqdn" -o tsv
