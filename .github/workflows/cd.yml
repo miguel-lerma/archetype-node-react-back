@@ -47,7 +47,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Preflight: validar variables requeridas
+      - name: "Preflight: validar variables requeridas"
         shell: bash
         run: |
           set -euo pipefail
@@ -154,8 +154,3 @@ jobs:
               --min-replicas "${MIN_REPLICAS}" --max-replicas "${MAX_REPLICAS}" \
               --set-env-vars APP_ENV="${APP_ENV}" PORT="${APP_PORT}" ALLOW_ORIGIN="${ALLOW_ORIGIN}"
           fi
-
-      # Si acabas de otorgar 'acrpull' a la identidad del ACA sobre el ACR,
-      # puedes reiniciar la revisión:
-      # - name: Restart revision
-      #   run: az containerapp revision restart -n "${ACA_NAME}" -g "${RESOURCE_GROUP}"
