@@ -5,36 +5,35 @@ on:
     branches: ["develop"]
   workflow_dispatch:
 
-# Toda la config proviene de Environment Variables (vars.*), NO secrets.
 env:
-  # Azure auth (OIDC con Service Principal federado)
-  AZURE_CLIENT_ID:        ${{ vars.AZURE_CLIENT_ID }}
-  AZURE_TENANT_ID:        ${{ vars.AZURE_TENANT_ID }}
-  AZURE_SUBSCRIPTION_ID:  ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  # Credenciales OIDC / Sub (ponlas como Variables del repositorio/ambiente, NO como secretos)
+  AZURE_CLIENT_ID: d986d4dd-0537-4052-9ab0-1e0dbf02e43b
+  AZURE_TENANT_ID: a3907a6d-bbd7-425a-9e46-d06e8a173ba6
+  AZURE_SUBSCRIPTION_ID: a7fb9745-e74d-4e51-b7da-75b90a77b7fd
 
-  # ACR
-  ACR_NAME:   ${{ vars.ACR_NAME || 'itxzacrlab01' }}
-  REGISTRY:   ${{ vars.ACR_LOGIN_SERVER || 'itxzacrlab01.azurecr.io' }}
-  IMAGE_NAME: ${{ vars.IMAGE_NAME || 'archetype-back' }}
+  # Azure Container Registry (ACR)
+  ACR_NAME: itxzacrlab01
+  REGISTRY: itxzacrlab01.azurecr.io
+  IMAGE_NAME: archetype-back
 
-  # RG y ACA
-  RESOURCE_GROUP: ${{ vars.AZ_RESOURCE_GROUP || 'ITX-RG-01' }}
-  ACA_ENV_NAME:   ${{ vars.ACA_ENV_NAME   || 'env-lab-aca' }}
-  ACA_NAME:       ${{ vars.APP_NAME       || 'be-dev' }}
-  LOCATION:       ${{ vars.AZ_LOCATION    || 'eastus' }}
+  # Azure Resource Group y Container Apps
+  RESOURCE_GROUP: ITX-RG-01
+  ACA_ENV_NAME: env-lab-aca
+  ACA_NAME: be-dev
+  LOCATION: eastus
 
-  # Config app
-  CPU:           ${{ vars.CPU            || '0.25' }}
-  MEMORY:        ${{ vars.MEMORY         || '0.5Gi' }}   # unidad en Gi
-  MIN_REPLICAS:  ${{ vars.MIN_REPLICAS   || '0' }}
-  MAX_REPLICAS:  ${{ vars.MAX_REPLICAS   || '1' }}
-  TARGET_PORT:   ${{ vars.TARGET_PORT    || '8080' }}
-  APP_PORT:      ${{ vars.APP_PORT       || '8080' }}
-  APP_ENV:       ${{ vars.APP_ENV        || 'dev' }}
-  ALLOW_ORIGIN:  ${{ vars.ALLOW_ORIGIN   || '*' }}
+  # Config de la app
+  CPU: "0.25"
+  MEMORY: "0.5Gi"        # CLI exige sufijo Gi
+  MIN_REPLICAS: "0"
+  MAX_REPLICAS: "1"
+  TARGET_PORT: "8080"     # Puerto expuesto por el contenedor
+  APP_PORT: "8080"        # Si tu app lee PORT, mantenlo igual
+  APP_ENV: "dev"
+  ALLOW_ORIGIN: "*"
 
 permissions:
-  id-token: write
+  id-token: write   # requerido para OIDC con azure/login
   contents: read
 
 jobs:
@@ -47,7 +46,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: "Preflight: validar variables requeridas"
+      # Validación rápida de variables requeridas
+      - name: Preflight: validar variables requeridas
         shell: bash
         run: |
           set -euo pipefail
@@ -55,7 +55,7 @@ jobs:
             if [ -z "${!v:-}" ]; then echo "Falta variable: $v"; exit 1; fi
           done
 
-      - name: Azure Login (OIDC sin secretos)
+      - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
           client-id: ${{ env.AZURE_CLIENT_ID }}
@@ -84,7 +84,7 @@ jobs:
         run: |
           SHA="$(git rev-parse --short=40 HEAD)"
           TAG="develop-${SHA}"
-          echo "tag=${TAG}"   >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "image=${REGISTRY}/${IMAGE_NAME}:${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: ACR login
@@ -121,10 +121,55 @@ jobs:
       - name: Ensure ACA Environment exists
         shell: bash
         run: |
+          if [ -z "${ACA_ENV_NAME}" ]; then
+            echo "ACA_ENV_NAME is empty. Set it in Environment variables." >&2
+            exit 1
+          fi
           az containerapp env show \
             -n "${ACA_ENV_NAME}" -g "${RESOURCE_GROUP}" >/dev/null 2>&1 || \
           az containerapp env create \
             -n "${ACA_ENV_NAME}" -g "${RESOURCE_GROUP}" -l "${LOCATION}"
+
+      # 🔐 Preflight de identidad/roles/registry para evitar UNAUTHORIZED del ACR
+      - name: Preflight: identidad y permisos ACR (idempotente)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # ACR Id para el scope del rol
+          ACR_ID=$(az acr show -n "${ACR_NAME}" -g "${RESOURCE_GROUP}" --query id -o tsv)
+
+          # Si la CA existe, obtener/asegurar identidad. Si no existe, se asignará en 'create'
+          if az containerapp show -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" >/dev/null 2>&1; then
+            CA_MI=$(az containerapp show -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" --query "identity.principalId" -o tsv)
+            if [ -z "${CA_MI}" ] || [ "${CA_MI}" = "None" ]; then
+              echo "Asignando identidad administrada (system) a ${ACA_NAME}..."
+              az containerapp identity assign -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" --system-assigned >/dev/null
+              CA_MI=$(az containerapp show -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" --query "identity.principalId" -o tsv)
+            fi
+
+            # Rol AcrPull para la MI de la app
+            HAS_ROLE=$(az role assignment list \
+              --assignee "${CA_MI}" \
+              --role "AcrPull" \
+              --scope "${ACR_ID}" \
+              --query "length(@)" -o tsv)
+            if [ "${HAS_ROLE}" = "0" ]; then
+              echo "Creando asignación de rol AcrPull para la MI de la app en el ACR..."
+              az role assignment create --assignee "${CA_MI}" --role "AcrPull" --scope "${ACR_ID}" >/dev/null
+            else
+              echo "AcrPull ya asignado."
+            fi
+
+            # Vincular registry a la app con identidad system
+            echo "Vinculando registry con identidad system..."
+            az containerapp registry set \
+              -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" \
+              --server "${REGISTRY}" \
+              --identity system >/dev/null
+          else
+            echo "Container App aún no existe; se aplicará identidad/registry en create."
+          fi
 
       - name: Create or Update Container App
         shell: bash
@@ -132,6 +177,7 @@ jobs:
           IMG: ${{ steps.meta.outputs.image }}
         run: |
           set -euo pipefail
+
           if ! az containerapp show -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" >/dev/null 2>&1; then
             echo "Creating Container App '${ACA_NAME}'..."
             az containerapp create \
@@ -152,5 +198,7 @@ jobs:
               --image "${IMG}" \
               --cpu "${CPU}" --memory "${MEMORY}" \
               --min-replicas "${MIN_REPLICAS}" --max-replicas "${MAX_REPLICAS}" \
-              --set-env-vars APP_ENV="${APP_ENV}" PORT="${APP_PORT}" ALLOW_ORIGIN="${ALLOW_ORIGIN}"
+              --set-env-vars APP_ENV="${APP_ENV}" PORT="${APP_PORT}" ALLOW_ORIGIN="${ALLOW_ORIGIN}" \
+              --registry-server "${REGISTRY}" \
+              --registry-identity system
           fi
