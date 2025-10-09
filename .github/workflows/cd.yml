@@ -5,30 +5,36 @@ on:
     branches: ["develop"]
   workflow_dispatch:
 
+# Toda la config proviene de Environment Variables (vars.*), NO secrets.
 env:
-  # Azure Container Registry (ACR)
-  ACR_NAME: itxzacrlab01
-  REGISTRY: itxzacrlab01.azurecr.io
-  IMAGE_NAME: archetype-back
+  # Azure auth (OIDC con Service Principal federado)
+  AZURE_CLIENT_ID:        ${{ vars.AZURE_CLIENT_ID }}
+  AZURE_TENANT_ID:        ${{ vars.AZURE_TENANT_ID }}
+  AZURE_SUBSCRIPTION_ID:  ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-  # Azure Resource Group y Container Apps
-  RESOURCE_GROUP: ITX-RG-01
-  ACA_ENV_NAME: env-lab-aca
-  ACA_NAME: be-dev
-  LOCATION: eastus
+  # ACR
+  ACR_NAME:   ${{ vars.ACR_NAME || 'itxzacrlab01' }}
+  REGISTRY:   ${{ vars.ACR_LOGIN_SERVER || 'itxzacrlab01.azurecr.io' }}
+  IMAGE_NAME: ${{ vars.IMAGE_NAME || 'archetype-back' }}
 
-  # Config de la app
-  CPU: "0.25"
-  MEMORY: "0.5Gi"         # CLI exige sufijo Gi
-  MIN_REPLICAS: "0"
-  MAX_REPLICAS: "1"
-  TARGET_PORT: "8080"      # Puerto expuesto por el contenedor
-  APP_PORT: "8080"         # Si tu app lee PORT, mantenlo igual
-  APP_ENV: "dev"
-  ALLOW_ORIGIN: "*"
+  # RG y ACA
+  RESOURCE_GROUP: ${{ vars.AZ_RESOURCE_GROUP || 'ITX-RG-01' }}
+  ACA_ENV_NAME:   ${{ vars.ACA_ENV_NAME   || 'env-lab-aca' }}
+  ACA_NAME:       ${{ vars.APP_NAME       || 'be-dev' }}
+  LOCATION:       ${{ vars.AZ_LOCATION    || 'eastus' }}
+
+  # Config app
+  CPU:           ${{ vars.CPU            || '0.25' }}
+  MEMORY:        ${{ vars.MEMORY         || '0.5Gi' }}   # unidad en Gi
+  MIN_REPLICAS:  ${{ vars.MIN_REPLICAS   || '0' }}
+  MAX_REPLICAS:  ${{ vars.MAX_REPLICAS   || '1' }}
+  TARGET_PORT:   ${{ vars.TARGET_PORT    || '8080' }}
+  APP_PORT:      ${{ vars.APP_PORT       || '8080' }}
+  APP_ENV:       ${{ vars.APP_ENV        || 'dev' }}
+  ALLOW_ORIGIN:  ${{ vars.ALLOW_ORIGIN   || '*' }}
 
 permissions:
-  id-token: write   # requerido para OIDC con azure/login
+  id-token: write
   contents: read
 
 jobs:
@@ -41,12 +47,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Azure Login (OIDC)
+      - name: Preflight: validar variables requeridas
+        shell: bash
+        run: |
+          set -euo pipefail
+          for v in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID ACR_NAME REGISTRY RESOURCE_GROUP ACA_ENV_NAME ACA_NAME LOCATION; do
+            if [ -z "${!v:-}" ]; then echo "Falta variable: $v"; exit 1; fi
+          done
+
+      - name: Azure Login (OIDC sin secretos)
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
           environment: azurecloud
           allow-no-subscriptions: false
           audience: api://AzureADTokenExchange
@@ -70,7 +84,7 @@ jobs:
         run: |
           SHA="$(git rev-parse --short=40 HEAD)"
           TAG="develop-${SHA}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}"   >> "$GITHUB_OUTPUT"
           echo "image=${REGISTRY}/${IMAGE_NAME}:${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: ACR login
@@ -107,10 +121,6 @@ jobs:
       - name: Ensure ACA Environment exists
         shell: bash
         run: |
-          if [ -z "${ACA_ENV_NAME}" ]; then
-            echo "ACA_ENV_NAME is empty. Set it in Environment variables." >&2
-            exit 1
-          fi
           az containerapp env show \
             -n "${ACA_ENV_NAME}" -g "${RESOURCE_GROUP}" >/dev/null 2>&1 || \
           az containerapp env create \
@@ -122,7 +132,6 @@ jobs:
           IMG: ${{ steps.meta.outputs.image }}
         run: |
           set -euo pipefail
-
           if ! az containerapp show -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" >/dev/null 2>&1; then
             echo "Creating Container App '${ACA_NAME}'..."
             az containerapp create \
@@ -145,3 +154,8 @@ jobs:
               --min-replicas "${MIN_REPLICAS}" --max-replicas "${MAX_REPLICAS}" \
               --set-env-vars APP_ENV="${APP_ENV}" PORT="${APP_PORT}" ALLOW_ORIGIN="${ALLOW_ORIGIN}"
           fi
+
+      # Si acabas de otorgar 'acrpull' a la identidad del ACA sobre el ACR,
+      # puedes reiniciar la revisión:
+      # - name: Restart revision
+      #   run: az containerapp revision restart -n "${ACA_NAME}" -g "${RESOURCE_GROUP}"
