@@ -202,3 +202,7 @@ jobs:
               --registry-server "${REGISTRY}" \
               --registry-identity system
           fi
+
+      # Opcional: si acabas de otorgar roles, a veces ayuda forzar una nueva revisión
+      # - name: Restart revision
+      #   run: az containerapp revision restart -n "${ACA_NAME}" -g "${RESOURCE_GROUP}"
