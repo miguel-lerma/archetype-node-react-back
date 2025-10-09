@@ -129,7 +129,8 @@ jobs:
           az containerapp env create \
             -n "${ACA_ENV_NAME}" -g "${RESOURCE_GROUP}" -l "${LOCATION}"
 
-      - name: Preflight identidad y permisos ACR
+      # 🔐 Preflight identidad/roles y ENLACE DE REGISTRY sin disparar revisión si ya está
+      - name: Preflight identidad y permisos ACR (idempotente)
         shell: bash
         run: |
           set -euo pipefail
@@ -151,45 +152,62 @@ jobs:
               echo "Rol AcrPull ya presente."
             fi
 
-            echo "Enlazando registry con identidad system..."
-            az containerapp registry set -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" --server "${REGISTRY}" --identity system >/dev/null
+            # Solo setea registry si NO está ya con identity system, para no disparar revisión
+            REG_OK=$(az containerapp show -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" --query "configuration.registries[?server=='${REGISTRY}'] | length(@)" -o tsv)
+            if [ "${REG_OK:-0}" = "0" ]; then
+              echo "Enlazando registry por primera vez..."
+              az containerapp registry set -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" --server "${REGISTRY}" --identity system >/dev/null
+            else
+              echo "Registry ya enlazado; se deja igual para evitar nueva revisión."
+            fi
           else
             echo "La app aún no existe; se configurará en create."
           fi
 
-      - name: Create or update Container App (INGRESS INTERNAL)
+      # ✅ Verifica que el TAG ya aparece en ACR antes de actualizar la app (evita carreras)
+      - name: Wait for ACR tag visibility
+        shell: bash
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          echo "Esperando a que el tag '${TAG}' aparezca en ACR..."
+          for i in {1..6}; do
+            if az acr repository show-tags -n "${ACR_NAME}" --repository "${IMAGE_NAME}" -o tsv | grep -q "^${TAG}$"; then
+              echo "Tag presente en ACR."
+              exit 0
+            fi
+            echo "Tag aún no visible, reintento $i..."
+            sleep 5
+          done
+          echo "El tag no apareció en ACR a tiempo."
+          exit 1
+
+      - name: Create or update Container App (set image + registry en el mismo op)
         shell: bash
         env:
           IMG: ${{ steps.meta.outputs.image }}
         run: |
           set -euo pipefail
           if ! az containerapp show -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" >/dev/null 2>&1; then
-            echo "Creating Container App '${ACA_NAME}' (internal ingress)..."
+            echo "Creating Container App '${ACA_NAME}'..."
             az containerapp create \
               -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" \
               --environment "${ACA_ENV_NAME}" \
               --image "${IMG}" \
-              --ingress internal --target-port "${TARGET_PORT}" \
-              --registry-server "${REGISTRY}" \
-              --registry-identity system \
+              --ingress external --target-port "${TARGET_PORT}" \
+              --registry-server "${REGISTRY}" --registry-identity system \
               --system-assigned \
               --cpu "${CPU}" --memory "${MEMORY}" \
               --min-replicas "${MIN_REPLICAS}" --max-replicas "${MAX_REPLICAS}" \
               --env-vars APP_ENV="${APP_ENV}" PORT="${APP_PORT}" ALLOW_ORIGIN="${ALLOW_ORIGIN}"
           else
-            echo "Updating Container App '${ACA_NAME}' (internal ingress)..."
+            echo "Updating Container App '${ACA_NAME}'..."
             az containerapp update \
               -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" \
               --image "${IMG}" \
-              --ingress internal --target-port "${TARGET_PORT}" \
+              --registry-server "${REGISTRY}" --registry-identity system \
               --cpu "${CPU}" --memory "${MEMORY}" \
               --min-replicas "${MIN_REPLICAS}" --max-replicas "${MAX_REPLICAS}" \
               --set-env-vars APP_ENV="${APP_ENV}" PORT="${APP_PORT}" ALLOW_ORIGIN="${ALLOW_ORIGIN}"
           fi
-
-      - name: Mostrar FQDN interno del BE
-        shell: bash
-        run: |
-          echo -n "FQDN interno: "
-          az containerapp show -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" \
-            --query "properties.configuration.ingress.fqdn" -o tsv
