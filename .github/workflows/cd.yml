@@ -1,100 +1,74 @@
-name: CD Backend (ACA)
+name: CD
 
 on:
   push:
-    branches: [ develop ]
-    paths:
-      - 'src/**'
-      - 'Dockerfile'
-      - '.github/workflows/cd.yml'
+    branches: [develop]
   workflow_dispatch:
-
-# Requerido para OIDC y para poder leer el repo
-permissions:
-  id-token: write
-  contents: read
-
-# TODAS tomadas de "Repository/Environment Variables" (NO secrets)
-env:
-  # Azure auth (OIDC)
-  AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-  AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-  AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-  # Infra/Deploy
-  ACR_NAME: ${{ vars.ACR_NAME }}
-  REGISTRY: ${{ vars.REGISTRY }}                 # p.ej. itxzacrlab01.azurecr.io
-  IMAGE_NAME: ${{ vars.IMAGE_NAME }}             # p.ej. archetype-back
-  RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
-  ACA_ENV_NAME: ${{ vars.ACA_ENV_NAME }}
-  ACA_NAME: ${{ vars.ACA_NAME }}
-  LOCATION: ${{ vars.LOCATION }}
-
-  # Config de la app
-  CPU: ${{ vars.CPU }}                           # p.ej. 0.25
-  MEMORY: ${{ vars.MEMORY }}                     # p.ej. 0.5Gi
-  MIN_REPLICAS: ${{ vars.MIN_REPLICAS }}         # p.ej. 0
-  MAX_REPLICAS: ${{ vars.MAX_REPLICAS }}         # p.ej. 1
-  TARGET_PORT: ${{ vars.TARGET_PORT }}           # p.ej. 8080
-  APP_PORT: ${{ vars.APP_PORT }}                 # opcional si lo usas en tu app
-  APP_ENV: ${{ vars.APP_ENV }}                   # p.ej. dev
-  ALLOW_ORIGIN: ${{ vars.ALLOW_ORIGIN }}         # p.ej. *
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   deploy:
     name: deploy
     runs-on: ubuntu-latest
+    environment: dev   # <- clave para que se inyecten tus Environment Variables
+
+    env:
+      # Todas desde Environment Variables (no secrets)
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      REGISTRY: ${{ vars.REGISTRY }}
+      IMAGE_NAME: ${{ vars.IMAGE_NAME }}
+      RESOURCE_GROUP: ${{ vars.RESOURCE_GROUP }}
+      ACA_ENV_NAME: ${{ vars.ACA_ENV_NAME }}
+      ACA_NAME: ${{ vars.ACA_NAME }}
+      LOCATION: ${{ vars.LOCATION }}
+      CPU: ${{ vars.CPU }}
+      MEMORY: ${{ vars.MEMORY }}
+      MIN_REPLICAS: ${{ vars.MIN_REPLICAS }}
+      MAX_REPLICAS: ${{ vars.MAX_REPLICAS }}
+      TARGET_PORT: ${{ vars.TARGET_PORT }}
+      APP_PORT: ${{ vars.APP_PORT }}
+      APP_ENV: ${{ vars.APP_ENV }}
+      ALLOW_ORIGIN: ${{ vars.ALLOW_ORIGIN }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validar variables requeridas
-        shell: bash
+      - name: Verificar variables requeridas
         run: |
           set -euo pipefail
-          for v in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID ACR_NAME REGISTRY RESOURCE_GROUP ACA_ENV_NAME ACA_NAME LOCATION; do
+          for v in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID ACR_NAME REGISTRY RESOURCE_GROUP ACA_ENV_NAME ACA_NAME LOCATION IMAGE_NAME; do
             if [ -z "${!v:-}" ]; then echo "❌ Falta variable: $v"; exit 1; fi
           done
 
-      - name: Login Azure (OIDC)
+      - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
           client-id: ${{ env.AZURE_CLIENT_ID }}
           tenant-id: ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
-          audience: api://AzureADTokenExchange
-          enable-AzPSSession: false
-          allow-no-subscriptions: false
 
-      - name: Instalar extensión containerapp
+      - name: Instalar/Actualizar extensión containerapp
         uses: azure/CLI@v2
         with:
-          azcliversion: agentazcliversion
           inlineScript: az extension add -n containerapp --upgrade || true
 
       - name: Verificar ACR
-        shell: bash
         run: |
           echo "🔍 Verificando ACR '${ACR_NAME}' en RG '${RESOURCE_GROUP}'..."
           az acr show -n "${ACR_NAME}" -g "${RESOURCE_GROUP}" 1>/dev/null
 
-      - name: Metadata de imagen (tag con commit)
+      - name: Calcular tag de imagen
         id: meta
-        shell: bash
         run: |
-          set -euo pipefail
           SHA="$(git rev-parse --short=40 HEAD)"
           TAG="develop-${SHA}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "image=${REGISTRY}/${IMAGE_NAME}:${TAG}" >> "$GITHUB_OUTPUT"
 
-      - name: Login a ACR
-        shell: bash
+      - name: Login en ACR
         run: |
           set -euo pipefail
           if az acr login --name "${ACR_NAME}"; then
@@ -105,8 +79,7 @@ jobs:
             echo "$TOKEN" | docker login "${REGISTRY}" -u 00000000-0000-0000-0000-000000000000 --password-stdin
           fi
 
-      - name: Build & Push imagen
-        shell: bash
+      - name: Build & Push de la imagen
         env:
           IMG: ${{ steps.meta.outputs.image }}
         run: |
@@ -123,15 +96,12 @@ jobs:
           done
           echo "❌ Falló el push tras 3 intentos"; exit 1
 
-      - name: Asegurar entorno de ACA
-        shell: bash
+      - name: Asegurar ACA Environment
         run: |
           az containerapp env show -n "${ACA_ENV_NAME}" -g "${RESOURCE_GROUP}" >/dev/null 2>&1 || \
           az containerapp env create -n "${ACA_ENV_NAME}" -g "${RESOURCE_GROUP}" -l "${LOCATION}"
 
-      # BLOQUE CLAVE: evita que falle el job si enlazar el registry dispara una revisión con imagen vieja
-      - name: Asegurar identidad, rol AcrPull y registry (sin romper el job)
-        shell: bash
+      - name: Enlazar ACR y Managed Identity (idempotente)
         env:
           IMG: ${{ steps.meta.outputs.image }}
         run: |
@@ -139,62 +109,48 @@ jobs:
           ACR_ID=$(az acr show -n "${ACR_NAME}" -g "${RESOURCE_GROUP}" --query id -o tsv)
 
           if az containerapp show -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" >/dev/null 2>&1; then
-            # 1) Identidad system-assigned
             CA_MI=$(az containerapp show -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" --query "identity.principalId" -o tsv)
             if [ -z "${CA_MI}" ] || [ "${CA_MI}" = "None" ]; then
-              echo "🆔 Asignando identidad system a ${ACA_NAME}..."
               az containerapp identity assign -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" --system-assigned >/dev/null
               CA_MI=$(az containerapp show -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" --query "identity.principalId" -o tsv)
             fi
 
-            # 2) Rol AcrPull en el scope del ACR
             HAS_ROLE=$(az role assignment list --assignee "${CA_MI}" --role "AcrPull" --scope "${ACR_ID}" --query "length(@)" -o tsv)
             if [ "${HAS_ROLE}" = "0" ]; then
-              echo "🔐 Asignando rol AcrPull en el ACR..."
               az role assignment create \
                 --assignee-object-id "${CA_MI}" \
                 --assignee-principal-type ServicePrincipal \
                 --role "AcrPull" \
                 --scope "${ACR_ID}" >/dev/null
-            else
-              echo "✅ Rol AcrPull ya asignado."
             fi
 
-            # 3) Registry (comprobación fiable y 'set' tolerante a errores)
-            REG_CNT=$(az containerapp registry list -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" --query "[?server=='${REGISTRY}'] | length(@)" -o tsv 2>/dev/null || echo 0)
-            if [ "${REG_CNT:-0}" = "0" ]; then
-              echo "🔗 Enlazando registry (puede crear revisión efímera con imagen vieja; lo corregimos enseguida)..."
-              az containerapp registry set -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" --server "${REGISTRY}" --identity system || true
-            else
-              echo "🔁 Registry ya enlazado."
+            # Null-safe: evitar error cuando configuration.registries es null
+            REG_SERVERS="$(az containerapp show -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" --query "configuration.registries[].server" -o tsv 2>/dev/null || true)"
+            if ! echo "${REG_SERVERS}" | grep -qx "${REGISTRY}"; then
+              az containerapp registry set -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" --server "${REGISTRY}" --identity system >/dev/null
             fi
-          else
-            echo "ℹ️ La app no existe aún; se configurará en el paso de creación."
           fi
 
       - name: Crear/Actualizar Container App
-        shell: bash
         env:
           IMG: ${{ steps.meta.outputs.image }}
         run: |
           set -euo pipefail
           if az containerapp show -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" >/dev/null 2>&1; then
-            echo "🔄 Actualizando imagen a ${IMG}"
             az containerapp update \
               -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" \
               --image "${IMG}" \
-              --set-env-vars APP_ENV="${APP_ENV}" ALLOW_ORIGIN="${ALLOW_ORIGIN}" \
               --cpu "${CPU}" --memory "${MEMORY}" \
               --min-replicas "${MIN_REPLICAS}" --max-replicas "${MAX_REPLICAS}" \
-              --ingress external --target-port "${TARGET_PORT}" --transport auto
+              --set-env-vars APP_PORT="${APP_PORT}" APP_ENV="${APP_ENV}" ALLOW_ORIGIN="${ALLOW_ORIGIN}"
           else
-            echo "🆕 Creando Container App ${ACA_NAME}"
             az containerapp create \
-              -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" -e "${ACA_ENV_NAME}" \
+              -n "${ACA_NAME}" -g "${RESOURCE_GROUP}" \
+              --environment "${ACA_ENV_NAME}" \
               --image "${IMG}" \
-              --registry-server "${REGISTRY}" --registry-identity system \
-              --ingress external --target-port "${TARGET_PORT}" --transport auto \
+              --ingress external --target-port "${TARGET_PORT}" \
               --cpu "${CPU}" --memory "${MEMORY}" \
               --min-replicas "${MIN_REPLICAS}" --max-replicas "${MAX_REPLICAS}" \
-              --env-vars APP_ENV="${APP_ENV}" ALLOW_ORIGIN="${ALLOW_ORIGIN}"
+              --registry-server "${REGISTRY}" --registry-identity system \
+              --set-env-vars APP_PORT="${APP_PORT}" APP_ENV="${APP_ENV}" ALLOW_ORIGIN="${ALLOW_ORIGIN}"
           fi
