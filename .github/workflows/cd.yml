@@ -29,7 +29,7 @@ jobs:
       CPU: "0.25"
       HTTP_CONCURRENCY: "100"
       IMAGE_NAME: archetype-back
-      INGRESS: external
+      INGRESS: internal     # <-- Ajuste: forzamos internal de forma declarativa
       MAX_REPLICAS: "1"
       MEMORY: 0.5Gi
       MIN_REPLICAS: "0"
@@ -126,7 +126,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          # ¿Existe la app?
           if az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" >/dev/null 2>&1; then
             echo "🔄 App existe: actualizando SOLO la imagen (sin tocar registry)..."
             az containerapp update \
@@ -135,9 +134,14 @@ jobs:
               --container-name "${APP_NAME}" \
               --revision-suffix "r-$(date +%s)" \
               --set-env-vars IMAGE_TAG="${{ steps.meta.outputs.tag }}" NODE_ENV="${APP_ENV}" HTTP_CONCURRENCY="${HTTP_CONCURRENCY}"
+            
+            # Asegurar ingress interno si el entorno lo permite
+            az containerapp ingress enable \
+              -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" \
+              --type internal --target-port "${APP_PORT}"
+
           else
             echo "🆕 App no existe: creando con imagen + registry e identidad system..."
-            # Si defines puerto, añadimos --target-port
             TP_ARGS=""
             if [ -n "${APP_PORT:-}" ]; then
               TP_ARGS="--target-port ${APP_PORT}"
@@ -146,7 +150,7 @@ jobs:
             az containerapp create \
               -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" -e "${ACA_ENV_NAME}" \
               --image "${IMG}" \
-              --ingress "${INGRESS}" ${TP_ARGS} \
+              --ingress internal ${TP_ARGS} \
               --cpu "${CPU}" --memory "${MEMORY}" \
               --min-replicas "${MIN_REPLICAS}" --max-replicas "${MAX_REPLICAS}" \
               --registry-server "${ACR_LOGIN_SERVER}" --registry-identity system \
@@ -179,12 +183,12 @@ jobs:
           az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" \
             --query "properties.template.containers[].{name:name,image:image}" -o table
 
-      - name: URL pública (si aplica)
+      - name: URL interna (si aplica)
         shell: bash
         run: |
           FQDN=$(az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" --query "properties.configuration.ingress.fqdn" -o tsv || true)
           if [ -n "${FQDN}" ] && [ "${FQDN}" != "None" ]; then
-            echo "🌐 https://${FQDN}"
+            echo "🔒 URL interna: https://${FQDN}"
           else
-            echo "ℹ️ El Container App no tiene ingress público."
+            echo "ℹ️ El Container App no tiene ingress interno habilitado o el entorno no lo soporta."
           fi
