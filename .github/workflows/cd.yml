@@ -1,8 +1,9 @@
-name: CD to Azure Container Apps
+---
+name: CD (BE) to Azure Container Apps
 
 on:
   push:
-    branches: [ develop ]
+    branches: [develop]
   workflow_dispatch:
 
 permissions:
@@ -11,184 +12,37 @@ permissions:
 
 jobs:
   deploy:
-    name: Deploy to Azure Container Apps
-    runs-on: ubuntu-latest
+    name: Deploy BE (dev)
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
     environment: dev
+    secrets: inherit
+    with:
+      # Azure / ACR / RG / Env
+      acr_name: itxzacrlab01
+      acr_login_server: itxzacrlab01.azurecr.io
+      resource_group: ITX-RG-01
+      location: eastus
+      aca_env_name: env-lab-aca
 
-    env:
-      ACA_ENV_NAME: env-lab-aca
-      ACR_LOGIN_SERVER: itxzacrlab01.azurecr.io
-      ACR_NAME: itxzacrlab01
-      APP_ENV: dev
-      APP_NAME: be-dev
-      AZURE_CLIENT_ID: d986d4dd-0537-4052-9ab0-1e0dbf02e43b
-      AZURE_SUBSCRIPTION_ID: a7fb9745-e74d-4e51-b7da-75b90a77b7fd
-      AZURE_TENANT_ID: a3907a6d-bbd7-425a-9e46-d06e8a173ba6
-      AZ_LOCATION: eastus
-      AZ_RESOURCE_GROUP: ITX-RG-01
-      CPU: "0.25"
-      HTTP_CONCURRENCY: "100"
-      IMAGE_NAME: archetype-back
-      INGRESS: internal     # <-- Ajuste: forzamos internal de forma declarativa
-      MAX_REPLICAS: "1"
-      MEMORY: 0.5Gi
-      MIN_REPLICAS: "0"
-      KV_NAME: itxzakvlab01
-      APP_PORT: "3000"   # si tu contenedor escucha otro puerto, cambia este valor
+      # App / Imagen / Build
+      app_name: be-dev
+      app_dir: .
+      dockerfile: ./Dockerfile
+      image_name: archetype-back
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      # Ingress y puertos (BE interno)
+      ingress: internal
+      target_port: 3000
 
-      - name: Validar variables requeridas
-        shell: bash
-        run: |
-          set -euo pipefail
-          for v in ACA_ENV_NAME ACR_LOGIN_SERVER ACR_NAME APP_ENV APP_NAME AZURE_CLIENT_ID AZURE_SUBSCRIPTION_ID AZURE_TENANT_ID AZ_LOCATION AZ_RESOURCE_GROUP CPU HTTP_CONCURRENCY IMAGE_NAME INGRESS MAX_REPLICAS MEMORY MIN_REPLICAS; do
-            if [ -z "${!v:-}" ]; then echo "❌ Falta variable: $v"; exit 1; fi
-          done
+      # Recursos / escalado (controlables por ambiente)
+      cpu: "0.25"
+      memory: "0.5Gi"
+      min_replicas: 0
+      max_replicas: 1
 
-      - name: Login a Azure (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ env.AZURE_CLIENT_ID }}
-          tenant-id: ${{ env.AZURE_TENANT_ID }}
-          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
-          audience: api://AzureADTokenExchange
-
-      - name: Instalar/actualizar extensión containerapp
-        uses: azure/CLI@v2
-        with:
-          azcliversion: agentazcliversion
-          inlineScript: |
-            az extension add -n containerapp --upgrade || true
-
-      - name: Verificar ACR existe
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "🔍 Verificando ACR '${ACR_NAME}' en RG '${AZ_RESOURCE_GROUP}'..."
-          az acr show -n "${ACR_NAME}" -g "${AZ_RESOURCE_GROUP}" 1>/dev/null
-
-      - name: Calcular tag e imagen
-        id: meta
-        shell: bash
-        run: |
-          set -euo pipefail
-          TAG="develop-${GITHUB_SHA}"
-          IMG="${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${TAG}"
-          echo "tag=${TAG}"   >> "$GITHUB_OUTPUT"
-          echo "image=${IMG}" >> "$GITHUB_OUTPUT"
-          echo "📦 Tag: ${TAG}"
-          echo "🖼️  Image: ${IMG}"
-
-      - name: Login en ACR + build & push
-        env:
-          IMG: ${{ steps.meta.outputs.image }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if az acr login --name "${ACR_NAME}"; then
-            echo "✅ Login ACR correcto"
-          else
-            echo "⚠️  Login ACR standard falló; usando token temporal..."
-            TOKEN=$(az acr login --name "${ACR_NAME}" --expose-token --query accessToken -o tsv)
-            echo "$TOKEN" | docker login "${ACR_LOGIN_SERVER}" -u 00000000-0000-0000-0000-000000000000 --password-stdin
-          fi
-
-          echo "🏗️ Construyendo ${IMG}"
-          docker build -t "${IMG}" .
-
-          echo "🚀 Pushing ${IMG}"
-          for i in {1..3}; do
-            if docker push "${IMG}"; then
-              echo "✅ Imagen enviada: ${IMG}"
-              exit 0
-            fi
-            echo "⏳ Reintentando push (${i})..."
-            sleep 10
-          done
-          echo "❌ Falló el push tras 3 intentos"; exit 1
-
-      - name: Asegurar entorno (sin tocar registry si ya existe)
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          # Crear el Environment si no existe
-          az containerapp env show -n "${ACA_ENV_NAME}" -g "${AZ_RESOURCE_GROUP}" >/dev/null 2>&1 || \
-          az containerapp env create -n "${ACA_ENV_NAME}" -g "${AZ_RESOURCE_GROUP}" -l "${AZ_LOCATION}"
-
-      - name: Crear o actualizar Container App con imagen nueva
-        env:
-          IMG: ${{ steps.meta.outputs.image }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" >/dev/null 2>&1; then
-            echo "🔄 App existe: actualizando SOLO la imagen (sin tocar registry)..."
-            az containerapp update \
-              -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" \
-              --image "${IMG}" \
-              --container-name "${APP_NAME}" \
-              --revision-suffix "r-$(date +%s)" \
-              --set-env-vars IMAGE_TAG="${{ steps.meta.outputs.tag }}" NODE_ENV="${APP_ENV}" HTTP_CONCURRENCY="${HTTP_CONCURRENCY}"
-            
-            # Asegurar ingress interno si el entorno lo permite
-            az containerapp ingress enable \
-              -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" \
-              --type internal --target-port "${APP_PORT}"
-
-          else
-            echo "🆕 App no existe: creando con imagen + registry e identidad system..."
-            TP_ARGS=""
-            if [ -n "${APP_PORT:-}" ]; then
-              TP_ARGS="--target-port ${APP_PORT}"
-            fi
-
-            az containerapp create \
-              -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" -e "${ACA_ENV_NAME}" \
-              --image "${IMG}" \
-              --ingress internal ${TP_ARGS} \
-              --cpu "${CPU}" --memory "${MEMORY}" \
-              --min-replicas "${MIN_REPLICAS}" --max-replicas "${MAX_REPLICAS}" \
-              --registry-server "${ACR_LOGIN_SERVER}" --registry-identity system \
-              --set-env-vars IMAGE_TAG="${{ steps.meta.outputs.tag }}" NODE_ENV="${APP_ENV}" HTTP_CONCURRENCY="${HTTP_CONCURRENCY}"
-          fi
-
-      - name: Conceder rol AcrPull a la identidad del CA (por si no estaba)
-        shell: bash
-        run: |
-          set -euo pipefail
-          ACR_ID=$(az acr show -n "${ACR_NAME}" -g "${AZ_RESOURCE_GROUP}" --query id -o tsv)
-          CA_MI=$(az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" --query "identity.principalId" -o tsv || echo "")
-          if [ -n "${CA_MI}" ] && [ "${CA_MI}" != "None" ]; then
-            HAS_ROLE=$(az role assignment list --assignee "${CA_MI}" --role "AcrPull" --scope "${ACR_ID}" --query "length(@)" -o tsv || echo 0)
-            if [ "${HAS_ROLE}" = "0" ]; then
-              echo "🔐 Asignando rol AcrPull…"
-              az role assignment create \
-                --assignee-object-id "${CA_MI}" \
-                --assignee-principal-type ServicePrincipal \
-                --role "AcrPull" \
-                --scope "${ACR_ID}" >/dev/null
-            else
-              echo "✅ Rol AcrPull ya asignado."
-            fi
-          fi
-
-      - name: Mostrar imagen en ACA (después)
-        shell: bash
-        run: |
-          az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" \
-            --query "properties.template.containers[].{name:name,image:image}" -o table
-
-      - name: URL interna (si aplica)
-        shell: bash
-        run: |
-          FQDN=$(az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" --query "properties.configuration.ingress.fqdn" -o tsv || true)
-          if [ -n "${FQDN}" ] && [ "${FQDN}" != "None" ]; then
-            echo "🔒 URL interna: https://${FQDN}"
-          else
-            echo "ℹ️ El Container App no tiene ingress interno habilitado o el entorno no lo soporta."
-          fi
+      # Env vars de runtime (no secret)
+      env_vars: |
+        NODE_ENV=dev
+        PORT=3000
+        HTTP_CONCURRENCY=100
+        IMAGE_TAG=${{ github.sha }}
