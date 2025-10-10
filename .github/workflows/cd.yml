@@ -1,5 +1,4 @@
----
-name: CD (BE) to Azure Container Apps
+name: CD - Backend to Azure Container Apps
 
 on:
   push:
@@ -14,35 +13,36 @@ jobs:
   deploy:
     name: Deploy BE (dev)
     uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
-    environment: dev
     secrets: inherit
     with:
-      # Azure / ACR / RG / Env
-      acr_name: itxzacrlab01
-      acr_login_server: itxzacrlab01.azurecr.io
+      # ← OJO: environment va como input del reusable
+      environment: dev
+
+      # --- Azure / ACR ---
       resource_group: ITX-RG-01
       location: eastus
       aca_env_name: env-lab-aca
+      acr_name: itxzacrlab01
+      acr_login_server: itxzacrlab01.azurecr.io
 
-      # App / Imagen / Build
+      # --- App/Imagen ---
       app_name: be-dev
-      app_dir: .
-      dockerfile: ./Dockerfile
       image_name: archetype-back
+      context: .
+      dockerfile: ./Dockerfile
 
-      # Ingress y puertos (BE interno)
+      # --- Ingress/puerto (BE interno) ---
       ingress: internal
       target_port: 3000
 
-      # Recursos / escalado (controlables por ambiente)
+      # --- Recursos ---
       cpu: "0.25"
       memory: "0.5Gi"
-      min_replicas: 0
-      max_replicas: 1
+      min_replicas: "0"
+      max_replicas: "1"
 
-      # Env vars de runtime (no secret)
-      env_vars: |
+      # --- Env vars no secret de runtime ---
+      extra_env: |
         NODE_ENV=dev
-        PORT=3000
         HTTP_CONCURRENCY=100
-        IMAGE_TAG=${{ github.sha }}
+        PORT=3000
