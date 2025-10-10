@@ -1,5 +1,4 @@
----
-name: CD to Azure Container Apps (BE)
+name: CD - Deploy BE to Azure Container Apps
 
 on:
   push:
@@ -13,9 +12,11 @@ permissions:
 jobs:
   deploy:
     uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
+    permissions:
+      id-token: write
+      contents: read
     with:
       aca_environment: env-lab-aca
-
       resource_group: ITX-RG-01
       location: eastus
 
@@ -40,4 +41,3 @@ jobs:
         NODE_ENV=dev
         HTTP_CONCURRENCY=100
         PORT=3000
-    secrets: inherit
