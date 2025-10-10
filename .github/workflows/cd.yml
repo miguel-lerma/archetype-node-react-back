@@ -6,9 +6,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  id-token: write     # necesario para OIDC con azure/login
+  id-token: write     # OIDC para azure/login
   contents: read
-  packages: read
 
 jobs:
   deploy:
@@ -16,7 +15,6 @@ jobs:
     runs-on: ubuntu-latest
     environment: dev
 
-    # Variables: puedes definirlas aquí o como Variables/Secrets del repo/org/environment.
     env:
       ACA_ENV_NAME: env-lab-aca
       ACR_LOGIN_SERVER: itxzacrlab01.azurecr.io
@@ -36,7 +34,7 @@ jobs:
       MEMORY: 0.5Gi
       MIN_REPLICAS: "0"
       KV_NAME: itxzakvlab01
-      # APP_PORT: "3000"   # opcional, solo si necesitas exponer un puerto nuevo
+      # APP_PORT: "3000"   # descomenta si tu contenedor expone un puerto específico
 
     steps:
       - name: Checkout
@@ -112,13 +110,10 @@ jobs:
           done
           echo "❌ Falló el push tras 3 intentos"; exit 1
 
-      - name: Preparar entorno, identidad y registry en ACA
-        env:
-          IMG: ${{ steps.meta.outputs.image }}
+      - name: Asegurar entorno e identidad del Container App (sin tocar imagen)
         shell: bash
         run: |
           set -euo pipefail
-
           # Crear env si no existe
           az containerapp env show -n "${ACA_ENV_NAME}" -g "${AZ_RESOURCE_GROUP}" >/dev/null 2>&1 || \
           az containerapp env create -n "${ACA_ENV_NAME}" -g "${AZ_RESOURCE_GROUP}" -l "${AZ_LOCATION}"
@@ -129,13 +124,13 @@ jobs:
             if [ -z "${CA_MI}" ] || [ "${CA_MI}" = "None" ]; then
               echo "🆔 Asignando identidad system a ${APP_NAME}..."
               az containerapp identity assign -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" --system-assigned >/dev/null
-              CA_MI=$(az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" --query "identity.principalId" -o tsv)
             fi
           fi
 
           # Conceder rol AcrPull a la identidad del CA (si existe)
           ACR_ID=$(az acr show -n "${ACR_NAME}" -g "${AZ_RESOURCE_GROUP}" --query id -o tsv)
-          if [ -n "${CA_MI:-}" ] && [ "${CA_MI}" != "None" ]; then
+          CA_MI=$(az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" --query "identity.principalId" -o tsv || echo "")
+          if [ -n "${CA_MI}" ] && [ "${CA_MI}" != "None" ]; then
             HAS_ROLE=$(az role assignment list --assignee "${CA_MI}" --role "AcrPull" --scope "${ACR_ID}" --query "length(@)" -o tsv || echo 0)
             if [ "${HAS_ROLE}" = "0" ]; then
               echo "🔐 Asignando rol AcrPull en el ACR..."
@@ -149,18 +144,6 @@ jobs:
             fi
           fi
 
-          # Enlazar registry si hace falta
-          if az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" >/dev/null 2>&1; then
-            REG_SERVERS="$(az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" --query "configuration.registries[].server" -o tsv 2>/dev/null || true)"
-            if echo "${REG_SERVERS}" | grep -qx "${ACR_LOGIN_SERVER}"; then
-              echo "🔁 Registry ya enlazado."
-            else
-              echo "🔗 Enlazando registry..."
-              az containerapp registry set -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" --server "${ACR_LOGIN_SERVER}" --identity system >/dev/null
-            fi
-          fi
-
-      # --- Mitigar el problema del tag viejo en ACA ---
       - name: Mostrar imagen actual en ACA (antes)
         shell: bash
         run: |
@@ -168,30 +151,29 @@ jobs:
           az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" \
             --query "properties.template.containers[].{name:name,image:image}" -o table || true
 
-      - name: Forzar update con la imagen recién pusheada
+      # 🔥 ÚNICO update: imagen + registry juntos (evita crear revisión con tag viejo)
+      - name: Update a la revisión con la imagen recién subida
         env:
           IMG: ${{ steps.meta.outputs.image }}
         shell: bash
         run: |
           set -euo pipefail
           echo "🎯 Imagen objetivo: ${IMG}"
-          # Sanity check de existencia del tag en ACR
           TAG="${IMG##*:}"
           REPO="${IMAGE_NAME}"
-          EXISTS=$(az acr repository show-tags -n "${ACR_NAME}" --repository "${REPO}" \
-            --query "[?@=='${TAG}'] | length(@)" -o tsv)
+          EXISTS=$(az acr repository show-tags -n "${ACR_NAME}" --repository "${REPO}" --query "[?@=='${TAG}'] | length(@)" -o tsv)
           if [ "${EXISTS}" != "1" ]; then
             echo "❌ El tag ${TAG} no existe en ${ACR_NAME}/${REPO}"; exit 1
           fi
 
-          # Update explícito: imagen + container-name (APP_NAME)
+          # Importante: pasamos el registry en el MISMO update para no forzar revisión con imagen vieja
           az containerapp update \
             -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" \
             --image "${IMG}" \
             --container-name "${APP_NAME}" \
             --registry-login-server "${ACR_LOGIN_SERVER}" --registry-identity system \
             --revision-suffix "r-$(date +%s)" \
-            --set-env-vars IMAGE_TAG="${TAG}" NODE_ENV="${APP_ENV}"
+            --set-env-vars IMAGE_TAG="${TAG}" NODE_ENV="${APP_ENV}" HTTP_CONCURRENCY="${HTTP_CONCURRENCY}"
 
       - name: Mostrar imagen actual en ACA (después)
         shell: bash
