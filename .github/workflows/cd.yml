@@ -17,26 +17,25 @@ jobs:
     runs-on: ubuntu-24.04
     environment: dev
 
-    # Mapear *tus* variables del Environment sin renombrarlas
     env:
-      ACA_ENV_NAME:         ${{ vars.ACA_ENV_NAME }}
-      ACR_LOGIN_SERVER:     ${{ vars.ACR_LOGIN_SERVER }}
-      ACR_NAME:             ${{ vars.ACR_NAME }}
-      APP_ENV:              ${{ vars.APP_ENV }}
-      APP_NAME:             ${{ vars.APP_NAME }}
-      AZURE_CLIENT_ID:      ${{ vars.AZURE_CLIENT_ID }}
-      AZURE_SUBSCRIPTION_ID:${{ vars.AZURE_SUBSCRIPTION_ID }}
-      AZURE_TENANT_ID:      ${{ vars.AZURE_TENANT_ID }}
-      AZ_LOCATION:          ${{ vars.AZ_LOCATION }}
-      AZ_RESOURCE_GROUP:    ${{ vars.AZ_RESOURCE_GROUP }}
-      CPU:                  ${{ vars.CPU }}
-      HTTP_CONCURRENCY:     ${{ vars.HTTP_CONCURRENCY }}
-      IMAGE_NAME:           ${{ vars.IMAGE_NAME }}
-      INGRESS:              ${{ vars.INGRESS }}
-      KV_NAME:              ${{ vars.KV_NAME }}
-      MAX_REPLICAS:         ${{ vars.MAX_REPLICAS }}
-      MEMORY:               ${{ vars.MEMORY }}
-      MIN_REPLICAS:         ${{ vars.MIN_REPLICAS }}
+      ACA_ENV_NAME:          ${{ vars.ACA_ENV_NAME }}
+      ACR_LOGIN_SERVER:      ${{ vars.ACR_LOGIN_SERVER }}
+      ACR_NAME:              ${{ vars.ACR_NAME }}
+      APP_ENV:               ${{ vars.APP_ENV }}
+      APP_NAME:              ${{ vars.APP_NAME }}
+      AZURE_CLIENT_ID:       ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}   # ← FIX
+      AZURE_TENANT_ID:       ${{ vars.AZURE_TENANT_ID }}
+      AZ_LOCATION:           ${{ vars.AZ_LOCATION }}
+      AZ_RESOURCE_GROUP:     ${{ vars.AZ_RESOURCE_GROUP }}
+      CPU:                   ${{ vars.CPU }}
+      HTTP_CONCURRENCY:      ${{ vars.HTTP_CONCURRENCY }}
+      IMAGE_NAME:            ${{ vars.IMAGE_NAME }}
+      INGRESS:               ${{ vars.INGRESS }}
+      KV_NAME:               ${{ vars.KV_NAME }}
+      MAX_REPLICAS:          ${{ vars.MAX_REPLICAS }}
+      MEMORY:                ${{ vars.MEMORY }}
+      MIN_REPLICAS:          ${{ vars.MIN_REPLICAS }}
 
     steps:
       - name: Checkout
@@ -78,8 +77,8 @@ jobs:
           set -euo pipefail
           TAG="develop-${GITHUB_SHA}"
           IMG="${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${TAG}"
-          echo "tag=${TAG}"        >> "$GITHUB_OUTPUT"
-          echo "image=${IMG}"      >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}"   >> "$GITHUB_OUTPUT"
+          echo "image=${IMG}" >> "$GITHUB_OUTPUT"
           echo "📦 Tag: ${TAG}"
           echo "🖼️  Image: ${IMG}"
 
@@ -118,11 +117,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Crear env si no existe
           az containerapp env show -n "${ACA_ENV_NAME}" -g "${AZ_RESOURCE_GROUP}" >/dev/null 2>&1 || \
           az containerapp env create -n "${ACA_ENV_NAME}" -g "${AZ_RESOURCE_GROUP}" -l "${AZ_LOCATION}"
 
-          # Identidad y rol AcrPull
           if az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" >/dev/null 2>&1; then
             CA_MI=$(az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" --query "identity.principalId" -o tsv)
             if [ -z "${CA_MI}" ] || [ "${CA_MI}" = "None" ]; then
@@ -147,7 +144,6 @@ jobs:
             fi
           fi
 
-          # Enlazar registry si no está
           if az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" >/dev/null 2>&1; then
             REG_SERVERS="$(az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" --query "configuration.registries[].server" -o tsv 2>/dev/null || true)"
             if echo "${REG_SERVERS}" | grep -qx "${ACR_LOGIN_SERVER}"; then
@@ -164,10 +160,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # TARGET_PORT: usa APP_PORT si la defines; si no, 8080
           TARGET_PORT="${APP_PORT:-8080}"
-
-          # Flags comunes
           SCALE_FLAGS="--min-replicas ${MIN_REPLICAS} --max-replicas ${MAX_REPLICAS}"
           RES_FLAGS="--cpu ${CPU} --memory ${MEMORY}"
           INGRESS_FLAGS="--ingress ${INGRESS} --target-port ${TARGET_PORT} --transport auto --allow-insecure"
