@@ -1,48 +1,26 @@
-name: CD
+name: Deploy to Azure Container Apps
 
 on:
   push:
-    branches: [ "develop" ]
+    branches: [develop]
   workflow_dispatch:
 
 permissions:
-  id-token: write        # ⬅️ NECESARIO para OIDC con azure/login@v2
-  contents: write
-  packages: write
-  deployments: write
-  statuses: write
+  id-token: write
+  contents: read
+  packages: read
 
 jobs:
   deploy:
     name: Deploy to Azure Container Apps
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     environment: dev
-
-    env:
-      ACA_ENV_NAME:          ${{ vars.ACA_ENV_NAME }}
-      ACR_LOGIN_SERVER:      ${{ vars.ACR_LOGIN_SERVER }}
-      ACR_NAME:              ${{ vars.ACR_NAME }}
-      APP_ENV:               ${{ vars.APP_ENV }}
-      APP_NAME:              ${{ vars.APP_NAME }}
-      AZURE_CLIENT_ID:       ${{ vars.AZURE_CLIENT_ID }}
-      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      AZURE_TENANT_ID:       ${{ vars.AZURE_TENANT_ID }}
-      AZ_LOCATION:           ${{ vars.AZ_LOCATION }}
-      AZ_RESOURCE_GROUP:     ${{ vars.AZ_RESOURCE_GROUP }}
-      CPU:                   ${{ vars.CPU }}
-      HTTP_CONCURRENCY:      ${{ vars.HTTP_CONCURRENCY }}
-      IMAGE_NAME:            ${{ vars.IMAGE_NAME }}
-      INGRESS:               ${{ vars.INGRESS }}
-      KV_NAME:               ${{ vars.KV_NAME }}
-      MAX_REPLICAS:          ${{ vars.MAX_REPLICAS }}
-      MEMORY:                ${{ vars.MEMORY }}
-      MIN_REPLICAS:          ${{ vars.MIN_REPLICAS }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verificar variables requeridas
+      - name: Preflight de variables requeridas
         shell: bash
         run: |
           set -euo pipefail
@@ -50,28 +28,29 @@ jobs:
             if [ -z "${!v:-}" ]; then echo "❌ Falta variable: $v"; exit 1; fi
           done
 
-      - name: Login Azure (OIDC)
+      - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
           client-id: ${{ env.AZURE_CLIENT_ID }}
           tenant-id: ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
           audience: api://AzureADTokenExchange
+          enable-AzPSSession: false
 
-      - name: AZ CLI - containerapp ext
+      - name: Instalar/actualizar extensión containerapp
         uses: azure/CLI@v2
         with:
           inlineScript: |
             az extension add -n containerapp --upgrade || true
 
-      - name: Confirmar ACR
+      - name: Verificar ACR
         shell: bash
         run: |
           set -euo pipefail
           echo "🔍 Verificando ACR '${ACR_NAME}' en RG '${AZ_RESOURCE_GROUP}'..."
           az acr show -n "${ACR_NAME}" -g "${AZ_RESOURCE_GROUP}" 1>/dev/null
 
-      - name: Preparar metadatos de imagen
+      - name: Calcular tag e imagen
         id: meta
         shell: bash
         run: |
@@ -83,7 +62,7 @@ jobs:
           echo "📦 Tag: ${TAG}"
           echo "🖼️  Image: ${IMG}"
 
-      - name: Login ACR y push de imagen
+      - name: Docker login + build + push
         env:
           IMG: ${{ steps.meta.outputs.image }}
         shell: bash
@@ -111,16 +90,18 @@ jobs:
           done
           echo "❌ Falló el push tras 3 intentos"; exit 1
 
-      - name: Asegurar ACA Env y permisos ACR
+      - name: Preparar ACA env, identidad y registry
         env:
           IMG: ${{ steps.meta.outputs.image }}
         shell: bash
         run: |
           set -euo pipefail
 
+          # Crear env si no existe
           az containerapp env show -n "${ACA_ENV_NAME}" -g "${AZ_RESOURCE_GROUP}" >/dev/null 2>&1 || \
           az containerapp env create -n "${ACA_ENV_NAME}" -g "${AZ_RESOURCE_GROUP}" -l "${AZ_LOCATION}"
 
+          # Identidad del Container App y rol AcrPull
           if az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" >/dev/null 2>&1; then
             CA_MI=$(az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" --query "identity.principalId" -o tsv)
             if [ -z "${CA_MI}" ] || [ "${CA_MI}" = "None" ]; then
@@ -145,6 +126,7 @@ jobs:
             fi
           fi
 
+          # Enlazar registry si hace falta
           if az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" >/dev/null 2>&1; then
             REG_SERVERS="$(az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" --query "configuration.registries[].server" -o tsv 2>/dev/null || true)"
             if echo "${REG_SERVERS}" | grep -qx "${ACR_LOGIN_SERVER}"; then
@@ -162,42 +144,37 @@ jobs:
         run: |
           set -euo pipefail
           TARGET_PORT="${APP_PORT:-8080}"
-          SCALE_FLAGS="--min-replicas ${MIN_REPLICAS} --max-replicas ${MAX_REPLICAS}"
-          RES_FLAGS="--cpu ${CPU} --memory ${MEMORY}"
-          INGRESS_FLAGS="--ingress ${INGRESS} --target-port ${TARGET_PORT} --transport auto --allow-insecure"
-          REG_FLAGS="--registry-login-server ${ACR_LOGIN_SERVER} --registry-identity system"
 
           if az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" >/dev/null 2>&1; then
             echo "♻️ Actualizando ${APP_NAME} con imagen ${IMG}..."
             az containerapp update \
               -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" \
               --image "${IMG}" \
+              --container-name "${APP_NAME}" \
               --environment "${ACA_ENV_NAME}" \
-              ${RES_FLAGS} \
-              ${SCALE_FLAGS} \
-              --max-instances 0 \
-              --revision-mode Single \
-              --set-env-vars NODE_ENV=${APP_ENV} \
-              --ingress-revision-override false \
-              --http2 false \
-              --max-inflight-requests ${HTTP_CONCURRENCY} \
-              ${INGRESS_FLAGS} \
-              ${REG_FLAGS}
+              --cpu "${CPU}" \
+              --memory "${MEMORY}" \
+              --min-replicas "${MIN_REPLICAS}" \
+              --max-replicas "${MAX_REPLICAS}" \
+              --ingress "${INGRESS}" --target-port "${TARGET_PORT}" --transport auto \
+              --set-env-vars NODE_ENV="${APP_ENV}" \
+              --registry-login-server "${ACR_LOGIN_SERVER}" --registry-identity system \
+              --revision-suffix "r-$(date +%s)"
           else
             echo "🆕 Creando ${APP_NAME} con imagen ${IMG}..."
             az containerapp create \
               -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" \
               --environment "${ACA_ENV_NAME}" \
               --image "${IMG}" \
-              ${RES_FLAGS} \
-              ${SCALE_FLAGS} \
-              --revision-mode Single \
-              --set-env-vars NODE_ENV=${APP_ENV} \
-              --ingress-revision-override false \
-              --http2 false \
-              --max-inflight-requests ${HTTP_CONCURRENCY} \
-              ${INGRESS_FLAGS} \
-              ${REG_FLAGS}
+              --container-name "${APP_NAME}" \
+              --cpu "${CPU}" \
+              --memory "${MEMORY}" \
+              --min-replicas "${MIN_REPLICAS}" \
+              --max-replicas "${MAX_REPLICAS}" \
+              --ingress "${INGRESS}" --target-port "${TARGET_PORT}" --transport auto \
+              --set-env-vars NODE_ENV="${APP_ENV}" \
+              --registry-login-server "${ACR_LOGIN_SERVER}" --registry-identity system \
+              --revision-suffix "r-$(date +%s)"
           fi
 
       - name: Mostrar URL
