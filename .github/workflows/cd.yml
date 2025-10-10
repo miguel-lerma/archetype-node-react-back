@@ -15,23 +15,22 @@ jobs:
     uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
     secrets: inherit
     with:
-      # ← OJO: environment va como input del reusable
-      environment: dev
+      # --- obligatorio según tu reusable ---
+      aca_environment: env-lab-aca
+      image_ref: ${{ format('{0}/{1}:{2}-{3}', 'itxzacrlab01.azurecr.io', 'archetype-back', 'develop', github.sha) }}
 
       # --- Azure / ACR ---
       resource_group: ITX-RG-01
       location: eastus
-      aca_env_name: env-lab-aca
       acr_name: itxzacrlab01
       acr_login_server: itxzacrlab01.azurecr.io
 
-      # --- App/Imagen ---
+      # --- App/imagen ---
       app_name: be-dev
-      image_name: archetype-back
       context: .
       dockerfile: ./Dockerfile
 
-      # --- Ingress/puerto (BE interno) ---
+      # --- Ingress / puerto (BE interno) ---
       ingress: internal
       target_port: 3000
 
@@ -41,7 +40,7 @@ jobs:
       min_replicas: "0"
       max_replicas: "1"
 
-      # --- Env vars no secret de runtime ---
+      # --- Env vars de runtime (no secret) ---
       extra_env: |
         NODE_ENV=dev
         HTTP_CONCURRENCY=100
