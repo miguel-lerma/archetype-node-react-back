@@ -29,8 +29,8 @@ jobs:
       target_port: "3000"
       cpu: "0.25"
       memory: "0.5Gi"
-      "min_replicas": "0"
-      "max_replicas": "1"
+      #"min_replicas": "0"
+      #"max_replicas": "1"
       extra_env: |
         NODE_ENV=dev
         HTTP_CONCURRENCY=100
