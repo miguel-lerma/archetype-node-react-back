@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  id-token: write        # ⬅️ NECESARIO para OIDC con azure/login@v2
   contents: write
   packages: write
   deployments: write
@@ -24,7 +25,7 @@ jobs:
       APP_ENV:               ${{ vars.APP_ENV }}
       APP_NAME:              ${{ vars.APP_NAME }}
       AZURE_CLIENT_ID:       ${{ vars.AZURE_CLIENT_ID }}
-      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}   # ← FIX
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       AZURE_TENANT_ID:       ${{ vars.AZURE_TENANT_ID }}
       AZ_LOCATION:           ${{ vars.AZ_LOCATION }}
       AZ_RESOURCE_GROUP:     ${{ vars.AZ_RESOURCE_GROUP }}
