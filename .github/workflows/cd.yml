@@ -16,6 +16,28 @@ jobs:
     runs-on: ubuntu-latest
     environment: dev
 
+    # 👇 Carga tus variables (no se cambian nombres)
+    env:
+      ACA_ENV_NAME:        ${{ vars.ACA_ENV_NAME        || secrets.ACA_ENV_NAME }}
+      ACR_LOGIN_SERVER:    ${{ vars.ACR_LOGIN_SERVER    || secrets.ACR_LOGIN_SERVER }}
+      ACR_NAME:            ${{ vars.ACR_NAME            || secrets.ACR_NAME }}
+      APP_ENV:             ${{ vars.APP_ENV             || secrets.APP_ENV }}
+      APP_NAME:            ${{ vars.APP_NAME            || secrets.APP_NAME }}
+      AZURE_CLIENT_ID:     ${{ vars.AZURE_CLIENT_ID     || secrets.AZURE_CLIENT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+      AZURE_TENANT_ID:     ${{ vars.AZURE_TENANT_ID     || secrets.AZURE_TENANT_ID }}
+      AZ_LOCATION:         ${{ vars.AZ_LOCATION         || secrets.AZ_LOCATION }}
+      AZ_RESOURCE_GROUP:   ${{ vars.AZ_RESOURCE_GROUP   || secrets.AZ_RESOURCE_GROUP }}
+      CPU:                 ${{ vars.CPU                 || secrets.CPU }}
+      HTTP_CONCURRENCY:    ${{ vars.HTTP_CONCURRENCY    || secrets.HTTP_CONCURRENCY }}
+      IMAGE_NAME:          ${{ vars.IMAGE_NAME          || secrets.IMAGE_NAME }}
+      INGRESS:             ${{ vars.INGRESS             || secrets.INGRESS }}
+      MAX_REPLICAS:        ${{ vars.MAX_REPLICAS        || secrets.MAX_REPLICAS }}
+      MEMORY:              ${{ vars.MEMORY              || secrets.MEMORY }}
+      MIN_REPLICAS:        ${{ vars.MIN_REPLICAS        || secrets.MIN_REPLICAS }}
+      KV_NAME:             ${{ vars.KV_NAME             || secrets.KV_NAME }}
+      APP_PORT:            ${{ vars.APP_PORT            || secrets.APP_PORT }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
