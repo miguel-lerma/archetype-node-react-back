@@ -1,12 +1,12 @@
-name: Deploy to Azure Container Apps
+name: CD to Azure Container Apps
 
 on:
   push:
-    branches: [develop]
+    branches: [ develop ]
   workflow_dispatch:
 
 permissions:
-  id-token: write
+  id-token: write     # necesario para OIDC con azure/login
   contents: read
   packages: read
 
@@ -16,33 +16,33 @@ jobs:
     runs-on: ubuntu-latest
     environment: dev
 
-    # 👇 Carga tus variables (no se cambian nombres)
+    # Variables: puedes definirlas aquí o como Variables/Secrets del repo/org/environment.
     env:
-      ACA_ENV_NAME:        ${{ vars.ACA_ENV_NAME        || secrets.ACA_ENV_NAME }}
-      ACR_LOGIN_SERVER:    ${{ vars.ACR_LOGIN_SERVER    || secrets.ACR_LOGIN_SERVER }}
-      ACR_NAME:            ${{ vars.ACR_NAME            || secrets.ACR_NAME }}
-      APP_ENV:             ${{ vars.APP_ENV             || secrets.APP_ENV }}
-      APP_NAME:            ${{ vars.APP_NAME            || secrets.APP_NAME }}
-      AZURE_CLIENT_ID:     ${{ vars.AZURE_CLIENT_ID     || secrets.AZURE_CLIENT_ID }}
-      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
-      AZURE_TENANT_ID:     ${{ vars.AZURE_TENANT_ID     || secrets.AZURE_TENANT_ID }}
-      AZ_LOCATION:         ${{ vars.AZ_LOCATION         || secrets.AZ_LOCATION }}
-      AZ_RESOURCE_GROUP:   ${{ vars.AZ_RESOURCE_GROUP   || secrets.AZ_RESOURCE_GROUP }}
-      CPU:                 ${{ vars.CPU                 || secrets.CPU }}
-      HTTP_CONCURRENCY:    ${{ vars.HTTP_CONCURRENCY    || secrets.HTTP_CONCURRENCY }}
-      IMAGE_NAME:          ${{ vars.IMAGE_NAME          || secrets.IMAGE_NAME }}
-      INGRESS:             ${{ vars.INGRESS             || secrets.INGRESS }}
-      MAX_REPLICAS:        ${{ vars.MAX_REPLICAS        || secrets.MAX_REPLICAS }}
-      MEMORY:              ${{ vars.MEMORY              || secrets.MEMORY }}
-      MIN_REPLICAS:        ${{ vars.MIN_REPLICAS        || secrets.MIN_REPLICAS }}
-      KV_NAME:             ${{ vars.KV_NAME             || secrets.KV_NAME }}
-      APP_PORT:            ${{ vars.APP_PORT            || secrets.APP_PORT }}
+      ACA_ENV_NAME: env-lab-aca
+      ACR_LOGIN_SERVER: itxzacrlab01.azurecr.io
+      ACR_NAME: itxzacrlab01
+      APP_ENV: dev
+      APP_NAME: be-dev
+      AZURE_CLIENT_ID: d986d4dd-0537-4052-9ab0-1e0dbf02e43b
+      AZURE_SUBSCRIPTION_ID: a7fb9745-e74d-4e51-b7da-75b90a77b7fd
+      AZURE_TENANT_ID: a3907a6d-bbd7-425a-9e46-d06e8a173ba6
+      AZ_LOCATION: eastus
+      AZ_RESOURCE_GROUP: ITX-RG-01
+      CPU: "0.25"
+      HTTP_CONCURRENCY: "100"
+      IMAGE_NAME: archetype-back
+      INGRESS: external
+      MAX_REPLICAS: "1"
+      MEMORY: 0.5Gi
+      MIN_REPLICAS: "0"
+      KV_NAME: itxzakvlab01
+      # APP_PORT: "3000"   # opcional, solo si necesitas exponer un puerto nuevo
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Preflight de variables requeridas
+      - name: Validar variables requeridas
         shell: bash
         run: |
           set -euo pipefail
@@ -50,22 +50,22 @@ jobs:
             if [ -z "${!v:-}" ]; then echo "❌ Falta variable: $v"; exit 1; fi
           done
 
-      - name: Azure login (OIDC)
+      - name: Login a Azure (OIDC)
         uses: azure/login@v2
         with:
           client-id: ${{ env.AZURE_CLIENT_ID }}
           tenant-id: ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
           audience: api://AzureADTokenExchange
-          enable-AzPSSession: false
 
-      - name: Instalar/actualizar extensión containerapp
+      - name: Instalar/actualizar extensión containerapp (az)
         uses: azure/CLI@v2
         with:
+          azcliversion: agentazcliversion
           inlineScript: |
             az extension add -n containerapp --upgrade || true
 
-      - name: Verificar ACR
+      - name: Verificar ACR existe
         shell: bash
         run: |
           set -euo pipefail
@@ -84,7 +84,7 @@ jobs:
           echo "📦 Tag: ${TAG}"
           echo "🖼️  Image: ${IMG}"
 
-      - name: Docker login + build + push
+      - name: Login en ACR + build & push
         env:
           IMG: ${{ steps.meta.outputs.image }}
         shell: bash
@@ -112,7 +112,7 @@ jobs:
           done
           echo "❌ Falló el push tras 3 intentos"; exit 1
 
-      - name: Preparar ACA env, identidad y registry
+      - name: Preparar entorno, identidad y registry en ACA
         env:
           IMG: ${{ steps.meta.outputs.image }}
         shell: bash
@@ -123,7 +123,7 @@ jobs:
           az containerapp env show -n "${ACA_ENV_NAME}" -g "${AZ_RESOURCE_GROUP}" >/dev/null 2>&1 || \
           az containerapp env create -n "${ACA_ENV_NAME}" -g "${AZ_RESOURCE_GROUP}" -l "${AZ_LOCATION}"
 
-          # Identidad del Container App y rol AcrPull
+          # Si el Container App existe, asegurar identidad system-assigned
           if az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" >/dev/null 2>&1; then
             CA_MI=$(az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" --query "identity.principalId" -o tsv)
             if [ -z "${CA_MI}" ] || [ "${CA_MI}" = "None" ]; then
@@ -133,6 +133,7 @@ jobs:
             fi
           fi
 
+          # Conceder rol AcrPull a la identidad del CA (si existe)
           ACR_ID=$(az acr show -n "${ACR_NAME}" -g "${AZ_RESOURCE_GROUP}" --query id -o tsv)
           if [ -n "${CA_MI:-}" ] && [ "${CA_MI}" != "None" ]; then
             HAS_ROLE=$(az role assignment list --assignee "${CA_MI}" --role "AcrPull" --scope "${ACR_ID}" --query "length(@)" -o tsv || echo 0)
@@ -159,48 +160,52 @@ jobs:
             fi
           fi
 
-      - name: Crear/Actualizar Container App
+      # --- Mitigar el problema del tag viejo en ACA ---
+      - name: Mostrar imagen actual en ACA (antes)
+        shell: bash
+        run: |
+          echo "🔎 Imagen actual en ACA (antes del update):"
+          az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" \
+            --query "properties.template.containers[].{name:name,image:image}" -o table || true
+
+      - name: Forzar update con la imagen recién pusheada
         env:
           IMG: ${{ steps.meta.outputs.image }}
         shell: bash
         run: |
           set -euo pipefail
-          TARGET_PORT="${APP_PORT:-8080}"
-
-          if az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" >/dev/null 2>&1; then
-            echo "♻️ Actualizando ${APP_NAME} con imagen ${IMG}..."
-            az containerapp update \
-              -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" \
-              --image "${IMG}" \
-              --container-name "${APP_NAME}" \
-              --environment "${ACA_ENV_NAME}" \
-              --cpu "${CPU}" \
-              --memory "${MEMORY}" \
-              --min-replicas "${MIN_REPLICAS}" \
-              --max-replicas "${MAX_REPLICAS}" \
-              --ingress "${INGRESS}" --target-port "${TARGET_PORT}" --transport auto \
-              --set-env-vars NODE_ENV="${APP_ENV}" \
-              --registry-login-server "${ACR_LOGIN_SERVER}" --registry-identity system \
-              --revision-suffix "r-$(date +%s)"
-          else
-            echo "🆕 Creando ${APP_NAME} con imagen ${IMG}..."
-            az containerapp create \
-              -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" \
-              --environment "${ACA_ENV_NAME}" \
-              --image "${IMG}" \
-              --container-name "${APP_NAME}" \
-              --cpu "${CPU}" \
-              --memory "${MEMORY}" \
-              --min-replicas "${MIN_REPLICAS}" \
-              --max-replicas "${MAX_REPLICAS}" \
-              --ingress "${INGRESS}" --target-port "${TARGET_PORT}" --transport auto \
-              --set-env-vars NODE_ENV="${APP_ENV}" \
-              --registry-login-server "${ACR_LOGIN_SERVER}" --registry-identity system \
-              --revision-suffix "r-$(date +%s)"
+          echo "🎯 Imagen objetivo: ${IMG}"
+          # Sanity check de existencia del tag en ACR
+          TAG="${IMG##*:}"
+          REPO="${IMAGE_NAME}"
+          EXISTS=$(az acr repository show-tags -n "${ACR_NAME}" --repository "${REPO}" \
+            --query "[?@=='${TAG}'] | length(@)" -o tsv)
+          if [ "${EXISTS}" != "1" ]; then
+            echo "❌ El tag ${TAG} no existe en ${ACR_NAME}/${REPO}"; exit 1
           fi
 
-      - name: Mostrar URL
+          # Update explícito: imagen + container-name (APP_NAME)
+          az containerapp update \
+            -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" \
+            --image "${IMG}" \
+            --container-name "${APP_NAME}" \
+            --registry-login-server "${ACR_LOGIN_SERVER}" --registry-identity system \
+            --revision-suffix "r-$(date +%s)" \
+            --set-env-vars IMAGE_TAG="${TAG}" NODE_ENV="${APP_ENV}"
+
+      - name: Mostrar imagen actual en ACA (después)
         shell: bash
         run: |
-          URL=$(az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" --query "properties.configuration.ingress.fqdn" -o tsv)
-          echo "🌐 URL: https://${URL}"
+          echo "✅ Imagen en ACA tras el update:"
+          az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" \
+            --query "properties.template.containers[].{name:name,image:image}" -o table
+
+      - name: Mostrar URL pública (si hay Ingress)
+        shell: bash
+        run: |
+          FQDN=$(az containerapp show -n "${APP_NAME}" -g "${AZ_RESOURCE_GROUP}" --query "properties.configuration.ingress.fqdn" -o tsv || true)
+          if [ -n "${FQDN}" ] && [ "${FQDN}" != "None" ]; then
+            echo "🌐 https://${FQDN}"
+          else
+            echo "ℹ️ El Container App no tiene ingress público configurado."
+          fi
