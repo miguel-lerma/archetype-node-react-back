@@ -19,20 +19,26 @@ jobs:
       aca_environment: env-lab-aca
       resource_group: ITX-RG-01
       location: eastus
+
       acr_name: itxzacrlab01
       acr_login_server: itxzacrlab01.azurecr.io
+
       app_name: be-dev
       image_ref: ${{ format('{0}/{1}:{2}-{3}', 'itxzacrlab01.azurecr.io', 'archetype-back', 'develop', github.sha) }}
+
+      # Si deseas construir aquí, deja estos; si no, ponlos vacíos ("")
       context: .
       dockerfile: ./Dockerfile
+
       ingress: internal
       target_port: "3000"
+
       cpu: "0.25"
       memory: "0.5Gi"
-      #"min_replicas": "0"
-      #"max_replicas": "1"
+      min_replicas: "0"
+      max_replicas: "1"
+
       extra_env: |
         NODE_ENV=dev
         HTTP_CONCURRENCY=100
         PORT=3000
-
