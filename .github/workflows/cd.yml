@@ -30,7 +30,7 @@ jobs:
 
       # ---- ACR ----
       acr_name:        ${{ vars.ACR_NAME }}
-      acr_login_server:${{ vars.ACR_LOGIN_SERVER }}
+      acr_login_server: ${{ vars.ACR_LOGIN_SERVER }}
 
       # ---- App en ACA ----
       app_name:        ${{ vars.APP_NAME }}
