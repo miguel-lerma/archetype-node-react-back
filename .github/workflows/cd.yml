@@ -55,9 +55,25 @@ jobs:
             echo "memory=${{ vars.MEMORY }}"
             echo "min_replicas=${{ vars.MIN_REPLICAS }}"
             echo "max_replicas=${{ vars.MAX_REPLICAS }}"
-            echo "node_env=${{ vars.NODE_ENV }}"
+            echo "node_env=${{ vars.NODE_ENV || 'production' }}"
             echo "acr_identity_client_id=${{ vars.ACR_IDENTITY_CLIENT_ID }}"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Validate required vars
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          [[ -z "${{ vars.RESOURCE_GROUP }}" ]] && missing+=("RESOURCE_GROUP")
+          [[ -z "${{ vars.ACA_ENV }}" ]] && missing+=("ACA_ENV")
+          [[ -z "${{ vars.AZURE_REGION }}" ]] && missing+=("AZURE_REGION")
+          [[ -z "${{ vars.APP_NAME }}" ]] && missing+=("APP_NAME")
+          [[ -z "${{ vars.ACR_LOGIN_SERVER }}" ]] && missing+=("ACR_LOGIN_SERVER")
+          [[ -z "${{ vars.IMAGE_REPO }}" ]] && missing+=("IMAGE_REPO")
+          if (( ${#missing[@]} )); then
+            echo "Faltan variables en el Environment 'dev': ${missing[*]}"
+            exit 1
+          fi
 
   deploy:
     name: Deploy to ACA (reusable)
@@ -81,7 +97,14 @@ jobs:
 
       # ---- App e imagen ----
       app_name: ${{ needs.collect_vars.outputs.app_name }}
-      image_ref: ${{ format('{0}/{1}:{2}-{3}', needs.collect_vars.outputs.acr_login_server, needs.collect_vars.outputs.image_repo, github.ref_name, github.sha) }}
+      image_ref: >-
+        ${{ format(
+          '{0}/{1}:{2}-{3}',
+          needs.collect_vars.outputs.acr_login_server,
+          needs.collect_vars.outputs.image_repo,
+          github.ref_name,
+          github.sha
+        ) }}
 
       # ---- Ingress/puerto ----
       ingress: ${{ needs.collect_vars.outputs.ingress }}
@@ -98,7 +121,7 @@ jobs:
       acr_identity_client_id: ${{ needs.collect_vars.outputs.acr_identity_client_id }}
 
       # ---- Env de la app ----
-      extra_env: |
+      extra_env: |-
         NODE_ENV=${{ needs.collect_vars.outputs.node_env }}
         HTTP_CONCURRENCY=100
         PORT=${{ needs.collect_vars.outputs.target_port }}
