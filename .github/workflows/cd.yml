@@ -24,17 +24,18 @@ jobs:
       azure_region: ${{ steps.setvars.outputs.azure_region }}
       app_name: ${{ steps.setvars.outputs.app_name }}
       acr_login_server: ${{ steps.setvars.outputs.acr_login_server }}
-      image_repo: ${{ steps.setvars.outputs.image_repo }}
+      image_name: ${{ steps.setvars.outputs.image_name }}
       ingress: ${{ steps.setvars.outputs.ingress }}
       target_port: ${{ steps.setvars.outputs.target_port }}
       cpu: ${{ steps.setvars.outputs.cpu }}
       memory: ${{ steps.setvars.outputs.memory }}
       min_replicas: ${{ steps.setvars.outputs.min_replicas }}
       max_replicas: ${{ steps.setvars.outputs.max_replicas }}
-      node_env: ${{ steps.setvars.outputs.node_env }}
+      app_env: ${{ steps.setvars.outputs.app_env }}
+      http_concurrency: ${{ steps.setvars.outputs.http_concurrency }}
       acr_identity_client_id: ${{ steps.setvars.outputs.acr_identity_client_id }}
     steps:
-      - name: Export env vars to outputs
+      - name: Export env vars to outputs (map to your standards)
         id: setvars
         shell: bash
         run: |
@@ -43,19 +44,26 @@ jobs:
             echo "azure_client_id=${{ vars.AZURE_CLIENT_ID }}"
             echo "azure_tenant_id=${{ vars.AZURE_TENANT_ID }}"
             echo "azure_subscription_id=${{ vars.AZURE_SUBSCRIPTION_ID }}"
-            echo "resource_group=${{ vars.RESOURCE_GROUP }}"
-            echo "aca_environment=${{ vars.ACA_ENV }}"
-            echo "azure_region=${{ vars.AZURE_REGION }}"
+
+            # ---- Tus nombres estándar ----
+            echo "resource_group=${{ vars.AZ_RESOURCE_GROUP }}"
+            echo "aca_environment=${{ vars.ACA_ENV_NAME }}"
+            echo "azure_region=${{ vars.AZ_LOCATION }}"
             echo "app_name=${{ vars.APP_NAME }}"
             echo "acr_login_server=${{ vars.ACR_LOGIN_SERVER }}"
-            echo "image_repo=${{ vars.IMAGE_REPO }}"
+            echo "image_name=${{ vars.IMAGE_NAME }}"
             echo "ingress=${{ vars.INGRESS }}"
-            echo "target_port=${{ vars.TARGET_PORT }}"
             echo "cpu=${{ vars.CPU }}"
             echo "memory=${{ vars.MEMORY }}"
             echo "min_replicas=${{ vars.MIN_REPLICAS }}"
             echo "max_replicas=${{ vars.MAX_REPLICAS }}"
-            echo "node_env=${{ vars.NODE_ENV || 'production' }}"
+            echo "app_env=${{ vars.APP_ENV || 'production' }}"
+            echo "http_concurrency=${{ vars.HTTP_CONCURRENCY || '100' }}"
+
+            # No lo vi en tu lista: ponemos default 3000 y puedes crear VAR TARGET_PORT si quieres sobreescribir
+            echo "target_port=${{ vars.TARGET_PORT || '3000' }}"
+
+            # Opcional si usas identidad de ACR
             echo "acr_identity_client_id=${{ vars.ACR_IDENTITY_CLIENT_ID }}"
           } >> "$GITHUB_OUTPUT"
 
@@ -64,12 +72,12 @@ jobs:
         run: |
           set -euo pipefail
           missing=()
-          [[ -z "${{ vars.RESOURCE_GROUP }}" ]] && missing+=("RESOURCE_GROUP")
-          [[ -z "${{ vars.ACA_ENV }}" ]] && missing+=("ACA_ENV")
-          [[ -z "${{ vars.AZURE_REGION }}" ]] && missing+=("AZURE_REGION")
+          [[ -z "${{ vars.AZ_RESOURCE_GROUP }}" ]] && missing+=("AZ_RESOURCE_GROUP")
+          [[ -z "${{ vars.ACA_ENV_NAME }}" ]] && missing+=("ACA_ENV_NAME")
+          [[ -z "${{ vars.AZ_LOCATION }}" ]] && missing+=("AZ_LOCATION")
           [[ -z "${{ vars.APP_NAME }}" ]] && missing+=("APP_NAME")
           [[ -z "${{ vars.ACR_LOGIN_SERVER }}" ]] && missing+=("ACR_LOGIN_SERVER")
-          [[ -z "${{ vars.IMAGE_REPO }}" ]] && missing+=("IMAGE_REPO")
+          [[ -z "${{ vars.IMAGE_NAME }}" ]] && missing+=("IMAGE_NAME")
           if (( ${#missing[@]} )); then
             echo "Faltan variables en el Environment 'dev': ${missing[*]}"
             exit 1
@@ -101,7 +109,7 @@ jobs:
         ${{ format(
           '{0}/{1}:{2}-{3}',
           needs.collect_vars.outputs.acr_login_server,
-          needs.collect_vars.outputs.image_repo,
+          needs.collect_vars.outputs.image_name,
           github.ref_name,
           github.sha
         ) }}
@@ -116,12 +124,12 @@ jobs:
       min_replicas: ${{ needs.collect_vars.outputs.min_replicas }}
       max_replicas: ${{ needs.collect_vars.outputs.max_replicas }}
 
-      # ---- Opcionales de registry ----
+      # ---- Registry ----
       acr_login_server: ${{ needs.collect_vars.outputs.acr_login_server }}
       acr_identity_client_id: ${{ needs.collect_vars.outputs.acr_identity_client_id }}
 
       # ---- Env de la app ----
       extra_env: |-
-        NODE_ENV=${{ needs.collect_vars.outputs.node_env }}
-        HTTP_CONCURRENCY=100
+        NODE_ENV=${{ needs.collect_vars.outputs.app_env }}
+        HTTP_CONCURRENCY=${{ needs.collect_vars.outputs.http_concurrency }}
         PORT=${{ needs.collect_vars.outputs.target_port }}
