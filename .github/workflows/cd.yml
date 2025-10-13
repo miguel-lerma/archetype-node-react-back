@@ -1,135 +1,201 @@
 ---
-name: CD - Deploy BE to Azure Container Apps
+name: Reusable - Deploy to Azure Container Apps
 
 on:
-  push:
-    branches: [develop]
-  workflow_dispatch:
+  workflow_call:
+    inputs:
+      environment:
+        description: "GitHub Environment a aplicar (dev, staging, prod, etc.)"
+        type: string
+        required: false
 
-permissions:
-  id-token: write
-  contents: read
+      # ---- OIDC / Azure ----
+      azure_client_id:
+        type: string
+        required: true
+      azure_tenant_id:
+        type: string
+        required: true
+      azure_subscription_id:
+        type: string
+        required: true
+
+      # ---- Destino ----
+      resource_group:
+        type: string
+        required: true
+      aca_environment:
+        type: string
+        required: true
+      location:
+        type: string
+        required: true  # ya no se usa para crear; lo mantengo por compatibilidad
+
+      # ---- App e imagen ----
+      app_name:
+        type: string
+        required: true
+      image_ref:
+        type: string
+        required: true
+
+      # ---- Ingress/puerto (NO se tocan en update) ----
+      ingress:
+        type: string
+        required: true
+      target_port:
+        type: string
+        required: true
+
+      # ---- Escala/recursos (NO se tocan en update) ----
+      cpu:
+        type: string
+        required: true
+      memory:
+        type: string
+        required: true
+      min_replicas:
+        type: string
+        required: true
+      max_replicas:
+        type: string
+        required: true
+
+      # ---- Opcionales ----
+      extra_env:
+        description: "Variables de entorno línea por línea (KEY=VALUE)"
+        type: string
+        required: false
+      acr_login_server:
+        description: "login server del ACR (opcional; **no** se cambia el registry)"
+        type: string
+        required: false
+      acr_identity_client_id:
+        description: "Client ID de identidad con AcrPull (opcional; **no** se usa aquí)"
+        type: string
+        required: false
+
+    secrets: {}
 
 jobs:
-  collect_vars:
-    name: Collect environment vars (dev)
-    runs-on: ubuntu-latest
-    environment: dev
-    outputs:
-      azure_client_id: ${{ steps.setvars.outputs.azure_client_id }}
-      azure_tenant_id: ${{ steps.setvars.outputs.azure_tenant_id }}
-      azure_subscription_id: ${{ steps.setvars.outputs.azure_subscription_id }}
-      resource_group: ${{ steps.setvars.outputs.resource_group }}
-      aca_environment: ${{ steps.setvars.outputs.aca_environment }}
-      azure_region: ${{ steps.setvars.outputs.azure_region }}
-      app_name: ${{ steps.setvars.outputs.app_name }}
-      acr_login_server: ${{ steps.setvars.outputs.acr_login_server }}
-      image_name: ${{ steps.setvars.outputs.image_name }}
-      ingress: ${{ steps.setvars.outputs.ingress }}
-      target_port: ${{ steps.setvars.outputs.target_port }}
-      cpu: ${{ steps.setvars.outputs.cpu }}
-      memory: ${{ steps.setvars.outputs.memory }}
-      min_replicas: ${{ steps.setvars.outputs.min_replicas }}
-      max_replicas: ${{ steps.setvars.outputs.max_replicas }}
-      app_env: ${{ steps.setvars.outputs.app_env }}
-      http_concurrency: ${{ steps.setvars.outputs.http_concurrency }}
-      acr_identity_client_id: ${{ steps.setvars.outputs.acr_identity_client_id }}
-    steps:
-      - name: Export env vars to outputs (map to your standards)
-        id: setvars
-        shell: bash
-        run: |
-          set -euo pipefail
-          {
-            echo "azure_client_id=${{ vars.AZURE_CLIENT_ID }}"
-            echo "azure_tenant_id=${{ vars.AZURE_TENANT_ID }}"
-            echo "azure_subscription_id=${{ vars.AZURE_SUBSCRIPTION_ID }}"
-
-            # ---- Tus nombres estándar ----
-            echo "resource_group=${{ vars.AZ_RESOURCE_GROUP }}"
-            echo "aca_environment=${{ vars.ACA_ENV_NAME }}"
-            echo "azure_region=${{ vars.AZ_LOCATION }}"
-            echo "app_name=${{ vars.APP_NAME }}"
-            echo "acr_login_server=${{ vars.ACR_LOGIN_SERVER }}"
-            echo "image_name=${{ vars.IMAGE_NAME }}"
-            echo "ingress=${{ vars.INGRESS }}"
-            echo "cpu=${{ vars.CPU }}"
-            echo "memory=${{ vars.MEMORY }}"
-            echo "min_replicas=${{ vars.MIN_REPLICAS }}"
-            echo "max_replicas=${{ vars.MAX_REPLICAS }}"
-            echo "app_env=${{ vars.APP_ENV || 'production' }}"
-            echo "http_concurrency=${{ vars.HTTP_CONCURRENCY || '100' }}"
-
-            # No lo vi en tu lista: ponemos default 3000 y puedes crear VAR TARGET_PORT si quieres sobreescribir
-            echo "target_port=${{ vars.TARGET_PORT || '3000' }}"
-
-            # Opcional si usas identidad de ACR
-            echo "acr_identity_client_id=${{ vars.ACR_IDENTITY_CLIENT_ID }}"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Validate required vars
-        shell: bash
-        run: |
-          set -euo pipefail
-          missing=()
-          [[ -z "${{ vars.AZ_RESOURCE_GROUP }}" ]] && missing+=("AZ_RESOURCE_GROUP")
-          [[ -z "${{ vars.ACA_ENV_NAME }}" ]] && missing+=("ACA_ENV_NAME")
-          [[ -z "${{ vars.AZ_LOCATION }}" ]] && missing+=("AZ_LOCATION")
-          [[ -z "${{ vars.APP_NAME }}" ]] && missing+=("APP_NAME")
-          [[ -z "${{ vars.ACR_LOGIN_SERVER }}" ]] && missing+=("ACR_LOGIN_SERVER")
-          [[ -z "${{ vars.IMAGE_NAME }}" ]] && missing+=("IMAGE_NAME")
-          if (( ${#missing[@]} )); then
-            echo "Faltan variables en el Environment 'dev': ${missing[*]}"
-            exit 1
-          fi
-
   deploy:
-    name: Deploy to ACA (reusable)
-    needs: collect_vars
-    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
+    environment: ${{ inputs.environment || '' }}
+    runs-on: ubuntu-latest
     permissions:
       id-token: write
       contents: read
-    with:
-      environment: dev
 
-      # ---- OIDC / Azure ----
-      azure_client_id: ${{ needs.collect_vars.outputs.azure_client_id }}
-      azure_tenant_id: ${{ needs.collect_vars.outputs.azure_tenant_id }}
-      azure_subscription_id: ${{ needs.collect_vars.outputs.azure_subscription_id }}
+    steps:
+      - name: Checkout repo (pipelines)
+        uses: actions/checkout@v4
 
-      # ---- Destino ----
-      resource_group: ${{ needs.collect_vars.outputs.resource_group }}
-      aca_environment: ${{ needs.collect_vars.outputs.aca_environment }}
-      location: ${{ needs.collect_vars.outputs.azure_region }}
+      # --- Lints opcionales ---
+      - name: Write .yamllint config
+        run: |
+          cat > .yamllint.yml <<'CFG'
+          extends: default
+          rules:
+            document-start:
+              present: true
+            line-length:
+              max: 160
+            trailing-spaces:
+              level: error
+            new-line-at-end-of-file:
+              level: error
+            truthy: disable
+            brackets: disable
+            comments: disable
+            indentation: disable
+          CFG
 
-      # ---- App e imagen ----
-      app_name: ${{ needs.collect_vars.outputs.app_name }}
-      image_ref: >-
-        ${{ format(
-          '{0}/{1}:{2}-{3}',
-          needs.collect_vars.outputs.acr_login_server,
-          needs.collect_vars.outputs.image_name,
-          github.ref_name,
-          github.sha
-        ) }}
+      - name: yamllint (YAML format)
+        uses: ibiqlik/action-yamllint@v3
+        with:
+          file_or_dir: .github/workflows
+          format: github
+          strict: true
+          no_warnings: false
 
-      # ---- Ingress/puerto ----
-      ingress: ${{ needs.collect_vars.outputs.ingress }}
-      target_port: ${{ needs.collect_vars.outputs.target_port }}
+      - name: actionlint (GHA syntax)
+        uses: rhysd/actionlint@v1.6.27
 
-      # ---- Escala/recursos ----
-      cpu: ${{ needs.collect_vars.outputs.cpu }}
-      memory: ${{ needs.collect_vars.outputs.memory }}
-      min_replicas: ${{ needs.collect_vars.outputs.min_replicas }}
-      max_replicas: ${{ needs.collect_vars.outputs.max_replicas }}
+      # --- Login Azure con OIDC ---
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ inputs.azure_client_id }}
+          tenant-id: ${{ inputs.azure_tenant_id }}
+          subscription-id: ${{ inputs.azure_subscription_id }}
 
-      # ---- Registry ----
-      acr_login_server: ${{ needs.collect_vars.outputs.acr_login_server }}
-      acr_identity_client_id: ${{ needs.collect_vars.outputs.acr_identity_client_id }}
+      # --- VALIDACIÓN: no crear nada, solo comprobar que existe ---
+      - name: Validar infraestructura existente (RG / ACA env / App)
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      # ---- Env de la app ----
-      extra_env: |-
-        NODE_ENV=${{ needs.collect_vars.outputs.app_env }}
-        HTTP_CONCURRENCY=${{ needs.collect_vars.outputs.http_concurrency }}
-        PORT=${{ needs.collect_vars.outputs.target_port }}
+          RG="${{ inputs.resource_group }}"
+          ACA_ENV="${{ inputs.aca_environment }}"
+          APP="${{ inputs.app_name }}"
+
+          echo "Validando Resource Group '${RG}'…"
+          if ! az group show -n "$RG" >/dev/null 2>&1; then
+            echo "❌ El Resource Group '$RG' NO existe. Este workflow no crea infra." >&2
+            exit 1
+          fi
+
+          echo "Validando ACA Environment '${ACA_ENV}' en RG '${RG}'…"
+          if ! az containerapp env show -g "$RG" -n "$ACA_ENV" >/dev/null 2>&1; then
+            echo "❌ El ACA Environment '$ACA_ENV' NO existe en RG '$RG'. Este workflow no crea infra." >&2
+            exit 1
+          fi
+
+          echo "Validando Container App '${APP}' en RG '${RG}'…"
+          if ! az containerapp show -g "$RG" -n "$APP" >/dev/null 2>&1; then
+            echo "❌ La Container App '$APP' NO existe en RG '$RG'. Este workflow no crea apps." >&2
+            exit 1
+          fi
+
+          echo "✅ Validación OK. Continuando con actualización de imagen/env vars…"
+
+      - name: Build env var block
+        id: envblk
+        shell: bash
+        run: |
+          set -euo pipefail
+          PARAMS=()
+          if [[ -n "${{ inputs.extra_env }}" ]]; then
+            while IFS= read -r line; do
+              [[ -z "$line" ]] && continue
+              key="${line%%=*}"
+              val="${line#*=}"
+              key="$(echo "$key" | xargs)"
+              val="$(echo "$val" | xargs)"
+              [[ -z "$key" ]] && continue
+              PARAMS+=( --env "$key=$val" )
+            done <<< "${{ inputs.extra_env }}"
+          fi
+          printf '%s\0' "${PARAMS[@]}" > envparams.bin
+          echo "file=envparams.bin" >> "$GITHUB_OUTPUT"
+
+      # --- SOLO UPDATE: imagen + env vars. NADA de ingress/recursos/escala/registry ---
+      - name: Update Container App (solo imagen y env)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          RG="${{ inputs.resource_group }}"
+          APP="${{ inputs.app_name }}"
+          IMAGE="${{ inputs.image_ref }}"
+
+          # Recupera los --env serializados
+          readarray -d '' ENV_PARAMS < "${{ steps.envblk.outputs.file }}"
+
+          echo "Actualizando imagen de '${APP}' a '${IMAGE}'…"
+          az containerapp update \
+            -g "$RG" \
+            -n "$APP" \
+            --image "$IMAGE" \
+            "${ENV_PARAMS[@]}"
+
+          echo "✅ Despliegue completado (sin cambios de infraestructura)."
