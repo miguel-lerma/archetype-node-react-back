@@ -11,45 +11,94 @@ permissions:
   contents: read
 
 jobs:
+  collect_vars:
+    name: Collect environment vars (dev)
+    runs-on: ubuntu-latest
+    environment: dev
+    outputs:
+      azure_client_id: ${{ steps.setvars.outputs.azure_client_id }}
+      azure_tenant_id: ${{ steps.setvars.outputs.azure_tenant_id }}
+      azure_subscription_id: ${{ steps.setvars.outputs.azure_subscription_id }}
+      resource_group: ${{ steps.setvars.outputs.resource_group }}
+      aca_environment: ${{ steps.setvars.outputs.aca_environment }}
+      azure_region: ${{ steps.setvars.outputs.azure_region }}
+      app_name: ${{ steps.setvars.outputs.app_name }}
+      acr_login_server: ${{ steps.setvars.outputs.acr_login_server }}
+      image_repo: ${{ steps.setvars.outputs.image_repo }}
+      ingress: ${{ steps.setvars.outputs.ingress }}
+      target_port: ${{ steps.setvars.outputs.target_port }}
+      cpu: ${{ steps.setvars.outputs.cpu }}
+      memory: ${{ steps.setvars.outputs.memory }}
+      min_replicas: ${{ steps.setvars.outputs.min_replicas }}
+      max_replicas: ${{ steps.setvars.outputs.max_replicas }}
+      node_env: ${{ steps.setvars.outputs.node_env }}
+      acr_identity_client_id: ${{ steps.setvars.outputs.acr_identity_client_id }}
+    steps:
+      - name: Export env vars to outputs
+        id: setvars
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "azure_client_id=${{ vars.AZURE_CLIENT_ID }}"
+            echo "azure_tenant_id=${{ vars.AZURE_TENANT_ID }}"
+            echo "azure_subscription_id=${{ vars.AZURE_SUBSCRIPTION_ID }}"
+            echo "resource_group=${{ vars.RESOURCE_GROUP }}"
+            echo "aca_environment=${{ vars.ACA_ENV }}"
+            echo "azure_region=${{ vars.AZURE_REGION }}"
+            echo "app_name=${{ vars.APP_NAME }}"
+            echo "acr_login_server=${{ vars.ACR_LOGIN_SERVER }}"
+            echo "image_repo=${{ vars.IMAGE_REPO }}"
+            echo "ingress=${{ vars.INGRESS }}"
+            echo "target_port=${{ vars.TARGET_PORT }}"
+            echo "cpu=${{ vars.CPU }}"
+            echo "memory=${{ vars.MEMORY }}"
+            echo "min_replicas=${{ vars.MIN_REPLICAS }}"
+            echo "max_replicas=${{ vars.MAX_REPLICAS }}"
+            echo "node_env=${{ vars.NODE_ENV }}"
+            echo "acr_identity_client_id=${{ vars.ACR_IDENTITY_CLIENT_ID }}"
+          } >> "$GITHUB_OUTPUT"
+
   deploy:
+    name: Deploy to ACA (reusable)
+    needs: collect_vars
     uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
     permissions:
       id-token: write
       contents: read
     with:
-      # 👇 Environment como input (habilita vars.* de ese env dentro del reusable)
       environment: dev
 
-      # ---- OIDC / Azure (desde repo/environments VARIABLES, no secretos) ----
-      azure_client_id:       ${{ vars.AZURE_CLIENT_ID }}
-      azure_tenant_id:       ${{ vars.AZURE_TENANT_ID }}
-      azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      # ---- OIDC / Azure ----
+      azure_client_id: ${{ needs.collect_vars.outputs.azure_client_id }}
+      azure_tenant_id: ${{ needs.collect_vars.outputs.azure_tenant_id }}
+      azure_subscription_id: ${{ needs.collect_vars.outputs.azure_subscription_id }}
 
       # ---- Destino ----
-      resource_group:  ${{ vars.RESOURCE_GROUP }}
-      aca_environment: ${{ vars.ACA_ENV }}
-      location:        ${{ vars.AZURE_REGION }}
+      resource_group: ${{ needs.collect_vars.outputs.resource_group }}
+      aca_environment: ${{ needs.collect_vars.outputs.aca_environment }}
+      location: ${{ needs.collect_vars.outputs.azure_region }}
 
       # ---- App e imagen ----
-      app_name:  ${{ vars.APP_NAME }}
-      image_ref: ${{ format('{0}/{1}:{2}-{3}', vars.ACR_LOGIN_SERVER, vars.IMAGE_REPO, github.ref_name, github.sha) }}
+      app_name: ${{ needs.collect_vars.outputs.app_name }}
+      image_ref: ${{ format('{0}/{1}:{2}-{3}', needs.collect_vars.outputs.acr_login_server, needs.collect_vars.outputs.image_repo, github.ref_name, github.sha) }}
 
       # ---- Ingress/puerto ----
-      ingress:     ${{ vars.INGRESS }}      # internal | external
-      target_port: ${{ vars.TARGET_PORT }}  # "3000"
+      ingress: ${{ needs.collect_vars.outputs.ingress }}
+      target_port: ${{ needs.collect_vars.outputs.target_port }}
 
       # ---- Escala/recursos ----
-      cpu:          ${{ vars.CPU }}          # "0.25"
-      memory:       ${{ vars.MEMORY }}       # "0.5Gi"
-      min_replicas: ${{ vars.MIN_REPLICAS }} # "0"
-      max_replicas: ${{ vars.MAX_REPLICAS }} # "1"
+      cpu: ${{ needs.collect_vars.outputs.cpu }}
+      memory: ${{ needs.collect_vars.outputs.memory }}
+      min_replicas: ${{ needs.collect_vars.outputs.min_replicas }}
+      max_replicas: ${{ needs.collect_vars.outputs.max_replicas }}
 
-      # ---- Opcionales (si quieres setear registry en la app automáticamente) ----
-      acr_login_server:       ${{ vars.ACR_LOGIN_SERVER }}
-      acr_identity_client_id: ${{ vars.ACR_IDENTITY_CLIENT_ID }}
+      # ---- Opcionales de registry ----
+      acr_login_server: ${{ needs.collect_vars.outputs.acr_login_server }}
+      acr_identity_client_id: ${{ needs.collect_vars.outputs.acr_identity_client_id }}
 
-      # ---- Env de la app (bloque KEY=VALUE por línea) ----
+      # ---- Env de la app ----
       extra_env: |
-        NODE_ENV=${{ vars.NODE_ENV }}
+        NODE_ENV=${{ needs.collect_vars.outputs.node_env }}
         HTTP_CONCURRENCY=100
-        PORT=${{ vars.TARGET_PORT }}
+        PORT=${{ needs.collect_vars.outputs.target_port }}
