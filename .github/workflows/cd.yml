@@ -11,34 +11,50 @@ permissions:
 
 jobs:
   deploy:
+    # Usa tu workflow reutilizable del repo pipelines
     uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
+
+    # Muy importante: esto inyecta las Environment Variables del env "dev" (vars.*)
+    environment: dev
+
+    # Repite permisos en el job por si tu reusable los necesita
     permissions:
       id-token: write
       contents: read
+
     with:
-      aca_environment: env-lab-aca
-      resource_group: ITX-RG-01
-      location: eastus
+      # ---- Azure & destino ----
+      aca_environment: ${{ vars.ACA_ENV }}
+      resource_group:  ${{ vars.RESOURCE_GROUP }}
+      location:        ${{ vars.AZURE_REGION }}
 
-      acr_name: itxzacrlab01
-      acr_login_server: itxzacrlab01.azurecr.io
+      # ---- ACR ----
+      acr_name:        ${{ vars.ACR_NAME }}
+      acr_login_server:${{ vars.ACR_LOGIN_SERVER }}
 
-      app_name: be-dev
-      image_ref: ${{ format('{0}/{1}:{2}-{3}', 'itxzacrlab01.azurecr.io', 'archetype-back', 'develop', github.sha) }}
+      # ---- App en ACA ----
+      app_name:        ${{ vars.APP_NAME }}
 
-      # Si deseas construir aquí, deja estos; si no, ponlos vacíos ("")
-      context: .
-      dockerfile: ./Dockerfile
+      # Etiqueta de imagen: <acr>/<repo>:<rama>-<sha>
+      # Ajusta 'archetype-back' al nombre real de tu repo de imagen si cambia
+      image_ref: ${{ format('{0}/{1}:{2}-{3}', vars.ACR_LOGIN_SERVER, 'archetype-back', github.ref_name, github.sha) }}
 
-      ingress: internal
-      target_port: "3000"
+      # Build context (si tu reusable los soporta; si no, elimínalos)
+      # context: .
+      # dockerfile: ./Dockerfile
 
-      cpu: "0.25"
-      memory: "0.5Gi"
-      min_replicas: "0"
-      max_replicas: "1"
+      # ---- Ingress y puerto ----
+      ingress:     ${{ vars.INGRESS }}     # internal | external
+      target_port: ${{ vars.TARGET_PORT }} # "3000"
 
+      # ---- Escala y recursos (en strings) ----
+      cpu:          ${{ vars.CPU }}        # "0.25"
+      memory:       ${{ vars.MEMORY }}     # "0.5Gi"
+      min_replicas: ${{ vars.MIN_REPLICAS }} # "0"
+      max_replicas: ${{ vars.MAX_REPLICAS }} # "1"
+
+      # ---- Variables de aplicación para el contenedor ----
       extra_env: |
-        NODE_ENV=dev
+        NODE_ENV=${{ vars.NODE_ENV }}
         HTTP_CONCURRENCY=100
-        PORT=3000
+        PORT=${{ vars.TARGET_PORT }}
