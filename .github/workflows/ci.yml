@@ -20,7 +20,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Crear config de yamllint (ruidosa-friendly)
+      - name: Crear configuración de yamllint
         run: |
           cat > .yamllint.yml <<'CFG'
           extends: default
@@ -31,7 +31,6 @@ jobs:
               level: error
             new-line-at-end-of-file:
               level: error
-            # Reglas ruidosas para GH expressions:
             colons: disable
             braces: disable
             line-length: disable
@@ -62,7 +61,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Azure Login (opcional por vars)
+      # Login a Azure solo si hay credenciales vía repository/environment vars (sin secrets)
+      - name: Azure Login (SPN federado vía vars)
         if: ${{ vars.AZURE_CLIENT_ID && vars.AZURE_TENANT_ID && vars.AZURE_SUBSCRIPTION_ID }}
         uses: azure/login@v2
         with:
@@ -71,38 +71,50 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # Ejemplos de build/push (déjalos como ya los tengas en tu repo)
-      # - name: Docker build
-      #   run: |
-      #     docker build -t ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} .
-      # - name: Docker tag & push
-      #   if: ${{ env.REGISTRY }}
-      #   run: |
-      #     docker tag ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
-      #     docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
+      - name: Docker build
+        run: |
+          docker build -t ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} .
+
+      # Login a ACR usando az + login server (sin secrets). Requiere que el SPN tenga AcrPush.
+      - name: ACR login (az acr login)
+        if: ${{ env.REGISTRY && vars.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          ACR_LOGIN_SERVER="${{ env.REGISTRY }}"
+          ACR_NAME="${ACR_LOGIN_SERVER%%.azurecr.io}"
+          az acr login --name "$ACR_NAME"
+
+      - name: Docker tag & push
+        if: ${{ env.REGISTRY }}
+        run: |
+          docker tag ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
 
   deploy-dev:
     name: Deploy DEV
-    # FIX: quitar refs/heads/ y dejar sólo @main (o un tag/sha)
+    # Solo desplegar a dev desde la rama develop para respetar la protección del environment
+    if: ${{ github.ref == 'refs/heads/develop' }}
     uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
     with:
       environment: dev
 
-      # No usamos env.* aquí; construir literal con github.sha
+      # Imagen que se empujó en el job anterior
       image_ref: /archetype-node-react-back:sha-${{ github.sha }}
 
+      # Parámetros opcionales (vacíos por ahora, como los traías)
       ingress: ''
       target_port: ''
       cpu: ''
       memory: ''
       min_replicas: ''
       max_replicas: ''
+
+      # Env extras (igual que antes)
       extra_env: |
         NODE_ENV=development
         APP_ENV=develop
         HTTP_CONCURRENCY=
 
-      # Solo repository variables, nada de secrets
+      # Solo repository/environment vars, nada de 'secrets'
       azure_client_id: ${{ vars.AZURE_CLIENT_ID }}
       azure_tenant_id: ${{ vars.AZURE_TENANT_ID }}
       azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
@@ -113,4 +125,3 @@ jobs:
 
       acr_login_server: ${{ vars.ACR_LOGIN_SERVER }}
       acr_identity_client_id: ${{ vars.ACR_IDENTITY_CLIENT_ID }}
-
