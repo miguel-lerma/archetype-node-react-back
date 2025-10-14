@@ -13,7 +13,8 @@ permissions:
   packages: write
 
 env:
-  IMAGE_NAME: archetype-node-react-back
+  # Debe coincidir con lo que usa el CD
+  IMAGE_NAME: archetype-back
 
 jobs:
   lint:
@@ -49,51 +50,41 @@ jobs:
         uses: rhysd/actionlint@v1.6.27
         continue-on-error: true
 
-  build:
-    name: Build Docker Image
-    runs-on: ubuntu-latest
-    env:
-      APP_VERSION: sha-${{ github.sha }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Docker build
-        run: docker build -t ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} .
-
   push-acr-dev:
     name: Push image to ACR (develop → DEV)
     if: ${{ github.ref == 'refs/heads/develop' }}
     runs-on: ubuntu-latest
     environment: dev
-    needs: [build]
     env:
       APP_VERSION: sha-${{ github.sha }}
-      REGISTRY: ${{ vars.ACR_LOGIN_SERVER }}
+      REGISTRY: ${{ vars.ACR_LOGIN_SERVER }}   # ej: itxzacrlab01.azurecr.io
     steps:
       - uses: actions/checkout@v4
+
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      - name: Rebuild (asegurar tag)
-        run: docker build -t ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} .
+
       - name: ACR login
         run: |
           if [ -z "${REGISTRY}" ]; then echo "ACR_LOGIN_SERVER vacío"; exit 1; fi
           ACR_NAME="${REGISTRY%%.azurecr.io}"
           az acr login --name "$ACR_NAME"
-      - name: Tag & Push
+
+      - name: Build, Tag & Push
         run: |
-          docker tag  ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
-          docker push ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
+          docker build -t ${IMAGE_NAME}:${APP_VERSION} .
+          docker tag  ${IMAGE_NAME}:${APP_VERSION} ${REGISTRY}/${IMAGE_NAME}:${APP_VERSION}
+          docker push ${REGISTRY}/${IMAGE_NAME}:${APP_VERSION}
 
   push-acr-qa:
     name: Push image to ACR (staging → QA)
     if: ${{ github.ref == 'refs/heads/staging' }}
     runs-on: ubuntu-latest
     environment: qa
-    needs: [build]
     env:
       APP_VERSION: sha-${{ github.sha }}
       REGISTRY: ${{ vars.ACR_LOGIN_SERVER }}
@@ -105,24 +96,22 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      - name: Rebuild (asegurar tag)
-        run: docker build -t ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} .
       - name: ACR login
         run: |
           if [ -z "${REGISTRY}" ]; then echo "ACR_LOGIN_SERVER vacío"; exit 1; fi
           ACR_NAME="${REGISTRY%%.azurecr.io}"
           az acr login --name "$ACR_NAME"
-      - name: Tag & Push
+      - name: Build, Tag & Push
         run: |
-          docker tag  ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
-          docker push ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
+          docker build -t ${IMAGE_NAME}:${APP_VERSION} .
+          docker tag  ${IMAGE_NAME}:${APP_VERSION} ${REGISTRY}/${IMAGE_NAME}:${APP_VERSION}
+          docker push ${REGISTRY}/${IMAGE_NAME}:${APP_VERSION}
 
-  push-acr-prd:  # ← antes “prod”
+  push-acr-prd:
     name: Push image to ACR (main → PRD)
     if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
-    environment: prd      # ← corrige el Environment
-    needs: [build]
+    environment: prd
     env:
       APP_VERSION: sha-${{ github.sha }}
       REGISTRY: ${{ vars.ACR_LOGIN_SERVER }}
@@ -134,14 +123,13 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      - name: Rebuild (asegurar tag)
-        run: docker build -t ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} .
       - name: ACR login
         run: |
           if [ -z "${REGISTRY}" ]; then echo "ACR_LOGIN_SERVER vacío"; exit 1; fi
           ACR_NAME="${REGISTRY%%.azurecr.io}"
           az acr login --name "$ACR_NAME"
-      - name: Tag & Push
+      - name: Build, Tag & Push
         run: |
-          docker tag  ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
-          docker push ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
+          docker build -t ${IMAGE_NAME}:${APP_VERSION} .
+          docker tag  ${IMAGE_NAME}:${APP_VERSION} ${REGISTRY}/${IMAGE_NAME}:${APP_VERSION}
+          docker push ${REGISTRY}/${IMAGE_NAME}:${APP_VERSION}

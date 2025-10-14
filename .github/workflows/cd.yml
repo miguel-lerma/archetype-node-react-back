@@ -1,9 +1,15 @@
+---
 name: Deploy to DEV
 
 on:
   push:
-    branches: [ "develop" ]
+    branches: ['develop']
   workflow_dispatch:
+
+# Necesario para que azure/login (en el reusable) pueda emitir el OIDC
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   deploy:
@@ -13,7 +19,7 @@ jobs:
       commit_sha: ${{ github.sha }}
 
       # Azure / OIDC
-      azure_client_id: ${{ vars.AZURE_CLIENT_ID }}        # o secrets si prefieres
+      azure_client_id: ${{ vars.AZURE_CLIENT_ID }}
       azure_tenant_id: ${{ vars.AZURE_TENANT_ID }}
       azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
@@ -25,12 +31,12 @@ jobs:
 
       # ACR + MI de la ACA para pulls
       acr_login_server: itxzacrlab01.azurecr.io
-      acr_identity_client_id: ${{ vars.ACA_MI_CLIENT_ID }} # clientId de la MI asignada a la ACA 'be-dev'
+      acr_identity_client_id: ${{ vars.ACA_MI_CLIENT_ID }}
 
-      # Repo de imagen dentro de ACR (sin el login server)
+      # Repo de imagen dentro del ACR (sin login server)
       image_repository: archetype-back
 
-      # Opcionales
+      # Opcionales (se omiten si están vacíos)
       ingress: ""
       target_port: ""
       cpu: ""
