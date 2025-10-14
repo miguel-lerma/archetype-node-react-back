@@ -2,9 +2,9 @@ name: CI - Build & Push Image
 
 on:
   push:
-    branches: ['**']
+    branches: ['develop', 'staging', 'main']
   pull_request:
-    branches: ['**']
+    branches: ['develop', 'staging', 'main']
 
 env:
   IMAGE_NAME: archetype-node-react-back
@@ -23,7 +23,6 @@ jobs:
             document-start: { present: true }
             trailing-spaces: { level: error }
             new-line-at-end-of-file: { level: error }
-            # Evitar falsos positivos por expresiones de GH:
             colons: disable
             braces: disable
             line-length: disable
@@ -39,12 +38,11 @@ jobs:
           file_or_dir: .github/workflows
           format: github
           strict: true
-          no_warnings: false
       - name: actionlint
         uses: rhysd/actionlint@v1.6.27
 
   build:
-    name: Build
+    name: Build Docker Image
     runs-on: ubuntu-latest
     env:
       APP_VERSION: sha-${{ github.sha }}
@@ -53,11 +51,10 @@ jobs:
       - name: Docker build
         run: docker build -t ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} .
 
-  push-acr-dev:
-    name: Push image (develop → dev)
-    if: ${{ github.ref == 'refs/heads/develop' }}
+  push-acr:
+    name: Push image to ACR
     runs-on: ubuntu-latest
-    environment: dev
+    needs: [build]
     env:
       APP_VERSION: sha-${{ github.sha }}
       REGISTRY: ${{ vars.ACR_LOGIN_SERVER }}
@@ -70,73 +67,26 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      - name: Build (asegurar tag)
+
+      - name: Rebuild image
         run: docker build -t ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} .
+
       - name: ACR login
         run: |
-          test -n "${REGISTRY}" || { echo "ACR_LOGIN_SERVER vacío"; exit 1; }
+          if [ -z "${REGISTRY}" ]; then
+            echo "❌ ACR_LOGIN_SERVER vacío"; exit 1
+          fi
           ACR_NAME="${REGISTRY%%.azurecr.io}"
           az acr login --name "$ACR_NAME"
-      - name: Push
+
+      - name: Tag & Push image
         run: |
           docker tag ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
           docker push ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
 
-  push-acr-qa:
-    name: Push image (release/* → qa)
-    if: ${{ startsWith(github.ref, 'refs/heads/release/') }}
-    runs-on: ubuntu-latest
-    environment: qa
-    env:
-      APP_VERSION: sha-${{ github.sha }}
-      REGISTRY: ${{ vars.ACR_LOGIN_SERVER }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Azure Login (OIDC)
-        uses: azure/login@v2
-        with:
-          auth-type: SERVICE_PRINCIPAL
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      - name: Build (asegurar tag)
-        run: docker build -t ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} .
-      - name: ACR login
+      - name: Summary
         run: |
-          test -n "${REGISTRY}" || { echo "ACR_LOGIN_SERVER vacío"; exit 1; }
-          ACR_NAME="${REGISTRY%%.azurecr.io}"
-          az acr login --name "$ACR_NAME"
-      - name: Push
-        run: |
-          docker tag ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
-          docker push ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
-
-  push-acr-prod:
-    name: Push image (main → prod)
-    if: ${{ github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-latest
-    environment: prod
-    env:
-      APP_VERSION: sha-${{ github.sha }}
-      REGISTRY: ${{ vars.ACR_LOGIN_SERVER }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Azure Login (OIDC)
-        uses: azure/login@v2
-        with:
-          auth-type: SERVICE_PRINCIPAL
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      - name: Build (asegurar tag)
-        run: docker build -t ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} .
-      - name: ACR login
-        run: |
-          test -n "${REGISTRY}" || { echo "ACR_LOGIN_SERVER vacío"; exit 1; }
-          ACR_NAME="${REGISTRY%%.azurecr.io}"
-          az acr login --name "$ACR_NAME"
-      - name: Push
-        run: |
-          docker tag ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
-          docker push ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
-          
+          echo "## Imagen empujada al ACR" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Nombre: ${{ env.IMAGE_NAME }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Versión: ${{ env.APP_VERSION }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Registry: ${{ env.REGISTRY }}" >> "$GITHUB_STEP_SUMMARY"
