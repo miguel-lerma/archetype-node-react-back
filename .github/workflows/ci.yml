@@ -1,84 +1,175 @@
 ---
-name: CI - Node React Back
+name: CI
 
 on:
-  push:
-    branches:
-      - develop
-      - feature/*
-      - hotfix/*
   pull_request:
-    branches:
-      - develop
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [develop, main]
 
+# Permisos mínimos; OIDC para azure/login
 permissions:
   contents: read
   id-token: write
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
-    name: YAML Lint
+    name: Lint Workflows
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Create yamllint config
-        run: |
-          cat > .yamllint.yml <<'CFG'
-          extends: default
-          rules:
-            document-start:
-              present: true
-            trailing-spaces:
-              level: error
-            new-line-at-end-of-file:
-              level: error
-            # Reglas ruidosas para GH expressions:
-            colons: disable
-            braces: disable
-            line-length: disable
-            truthy: disable
-            brackets: disable
-            comments: disable
-            indentation: disable
-          CFG
-
-      - name: YAML Lint
+      # yamllint con config inline (evita archivo temporal)
+      - name: yamllint
         uses: ibiqlik/action-yamllint@v3
         with:
           file_or_dir: .github/workflows
           format: github
-          strict: false  # evita fallos por espacios o estilo menor
+          strict: true
+          config_data: |
+            extends: default
+            rules:
+              document-start:
+                present: true
+              trailing-spaces:
+                level: error
+              new-line-at-end-of-file:
+                level: error
+              colons: disable
+              braces: disable
+              line-length: disable
+              truthy: disable
+              brackets: disable
+              comments: disable
+              indentation: disable
 
-  build:
-    name: Build & Push
+      # actionlint (sin shellcheck para evitar docker extra)
+      - name: actionlint
+        uses: rhysd/actionlint@v1.6.27
+        with:
+          shellcheck: false
+
+  test:
+    name: Node Tests
     runs-on: ubuntu-latest
     needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Lint (project)
+        run: |
+          if npm run | grep -qE 'lint'; then
+            npm run lint
+          else
+            echo "No lint script; skipping."
+          fi
+      - name: Test
+        run: |
+          if npm run | grep -qE 'test'; then
+            npm test --if-present
+          else
+            echo "No test script; skipping."
+          fi
+
+  build:
+    name: Build & Push Image
+    runs-on: ubuntu-latest
+    needs: test
+    # Solo en push a develop (evita secrets en PRs)
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/develop') }}
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write
     env:
       IMAGE_NAME: archetype-node-react-back
       REGISTRY: ${{ vars.ACR_LOGIN_SERVER }}
       APP_VERSION: sha-${{ github.sha }}
+    outputs:
+      image_ref: ${{ steps.build_push.outputs.image_ref }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Log in to Azure
+      # Validación temprana para fallar claro si falta algo crítico
+      - name: Validate required vars/secrets
+        run: |
+          miss=0
+          req_vars=(ACR_LOGIN_SERVER ACR_NAME AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID)
+          for key in "${req_vars[@]}"; do
+            val="${{ vars.ACR_LOGIN_SERVER }}"
+            case "$key" in
+              ACR_LOGIN_SERVER) val="${{ vars.ACR_LOGIN_SERVER }}";;
+              ACR_NAME) val="${{ vars.ACR_NAME }}";;
+              AZURE_CLIENT_ID) val="${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}";;
+              AZURE_TENANT_ID) val="${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}";;
+              AZURE_SUBSCRIPTION_ID) val="${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}";;
+            esac
+            if [ -z "$val" ]; then
+              echo "::error::Missing variable/secret: $key"
+              miss=1
+            fi
+          done
+          exit $miss
+
+      - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          client-id:       ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Log in to ACR
-        run: |
-          az acr login --name ${{ vars.ACR_NAME }}
+      - name: Login to ACR
+        run: az acr login --name ${{ vars.ACR_NAME }}
 
-      - name: Build and push image
+      - name: Build & Push
+        id: build_push
         run: |
-          docker build -t $REGISTRY/$IMAGE_NAME:$APP_VERSION .
-          docker push $REGISTRY/$IMAGE_NAME:$APP_VERSION
+          set -e
+          IMAGE="${REGISTRY}/${IMAGE_NAME}:${APP_VERSION}"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "image_ref=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "✅ Pushed $IMAGE" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Summary
-        run: |
-          echo "✅ Image pushed to: $REGISTRY/$IMAGE_NAME:$APP_VERSION" >> $GITHUB_STEP_SUMMARY
+  deploy:
+    name: Deploy to ACA (dev)
+    needs: build
+    # mismo guard que build
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/develop') }}
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@refs/heads/main
+    with:
+      environment: dev
+      # Azure / ACR (desde environment dev)
+      azure_client_id:        ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      azure_tenant_id:        ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      azure_subscription_id:  ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+      acr_login_server:       ${{ vars.ACR_LOGIN_SERVER }}
+      acr_identity_client_id: ${{ vars.ACR_IDENTITY_CLIENT_ID || secrets.ACR_IDENTITY_CLIENT_ID }}
+
+      # App / Infra (ajusta estos vars en el environment dev)
+      resource_group:   ${{ vars.AZURE_RESOURCE_GROUP }}
+      aca_environment:  ${{ vars.ACA_ENVIRONMENT }}
+      location:         ${{ vars.AZURE_LOCATION }}
+      app_name:         ${{ vars.APP_NAME }}
+      ingress:          ${{ vars.INGRESS }}
+      target_port:      ${{ vars.TARGET_PORT }}
+      cpu:              ${{ vars.CPU }}
+      memory:           ${{ vars.MEMORY }}
+      min_replicas:     ${{ vars.MIN_REPLICAS }}
+      max_replicas:     ${{ vars.MAX_REPLICAS }}
+      extra_env: |
+        NODE_ENV=development
+        APP_ENV=develop
+        HTTP_CONCURRENCY=
+      # la imagen generada en el job build
+      image_ref:        ${{ needs.build.outputs.image_ref }}
