@@ -13,16 +13,16 @@ permissions:
 
 jobs:
   tests:
-    name: "Reusable: Build Node API"
+    # Llama al workflow reusable centralizado para build/test Node API
     uses: miguel-lerma/pipelines/.github/workflows/build-node-api.yml@main
-    permissions:
-      contents: read
     with:
       app_dir: "."
       node_version: "20.x"
       run_lint: true
       run_test: true
       run_build: false
+    permissions:
+      contents: read
 
   publish-image:
     name: Build & Push Docker image to ACR (OIDC)
@@ -30,51 +30,52 @@ jobs:
     needs: tests
     if: github.event_name == 'push'
 
-    # MUY IMPORTANTE: ligar el job al Environment correcto
+    # Mapeo de environment visual en GitHub (no afecta la lógica real)
     environment:
-      name: ${{ github.ref_name == 'main' && 'production'
-              || github.ref_name == 'staging' && 'staging'
-              || github.ref_name == 'develop' && 'dev'
+      name: ${{ github.ref_name == 'main' && 'prd' 
+              || github.ref_name == 'staging' && 'stg' 
+              || github.ref_name == 'develop' && 'dev' 
               || 'dev' }}
 
-    # Estas vars se leen desde el Environment ligado arriba
     env:
-      ACR_LOGIN_SERVER:       ${{ vars.ACR_LOGIN_SERVER }}
-      AZURE_CLIENT_ID:        ${{ vars.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID:        ${{ vars.AZURE_TENANT_ID }}
-      AZURE_SUBSCRIPTION_ID:  ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Debug env selection (no imprime secretos)
-        run: |
-          echo "Branch: $GITHUB_REF_NAME"
-          echo "Environment ligado: ${{ job.environment.name }}"
-          echo "ACR_LOGIN_SERVER (expect non-empty): '${ACR_LOGIN_SERVER}'"
-
+      # --- Preflight ---
       - name: Preflight env check
+        shell: bash
         run: |
           [ -n "${ACR_LOGIN_SERVER}" ] || { echo "ACR_LOGIN_SERVER vacío"; exit 1; }
-          [ -n "${AZURE_CLIENT_ID}" ]   || { echo "AZURE_CLIENT_ID vacío"; exit 1; }
-          [ -n "${AZURE_TENANT_ID}" ]   || { echo "AZURE_TENANT_ID vacío"; exit 1; }
+          [ -n "${AZURE_CLIENT_ID}" ] || { echo "AZURE_CLIENT_ID vacío"; exit 1; }
+          [ -n "${AZURE_TENANT_ID}" ] || { echo "AZURE_TENANT_ID vacío"; exit 1; }
           [ -n "${AZURE_SUBSCRIPTION_ID}" ] || { echo "AZURE_SUBSCRIPTION_ID vacío"; exit 1; }
           echo "Environment OK"
 
+      # --- Azure Login (OIDC) ---
       - name: Azure OIDC Login
         uses: azure/login@v2
         with:
-          client-id:       ${{ env.AZURE_CLIENT_ID }}
-          tenant-id:       ${{ env.AZURE_TENANT_ID }}
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
+      # --- Derivar ACR ---
       - name: Derive ACR_NAME from server
-        run: echo "ACR_NAME=${ACR_LOGIN_SERVER%%.azurecr.io}" >> "$GITHUB_ENV"
+        shell: bash
+        run: |
+          echo "ACR_NAME=${ACR_LOGIN_SERVER%%.azurecr.io}" >> "$GITHUB_ENV"
 
       - name: Azure CLI - Login to ACR
-        run: az acr login --name "$ACR_NAME"
+        run: |
+          az acr login --name "$ACR_NAME"
 
+      # --- Docker Setup ---
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -100,12 +101,30 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
+      # --- Validación sintáctica opcional (YAML + GHA Lint) ---
+      - name: YAML format check
+        uses: ibiqlik/action-yamllint@v3
+        with:
+          file_or_dir: .github/workflows
+          format: github
+          strict: true
+          no_warnings: false
+        continue-on-error: true # No bloquea el pipeline si hay solo warnings
+
+      - name: Actionlint (workflow syntax check)
+        uses: rhysd/actionlint@v1.6.27
+        with:
+          shellcheck: false
+        continue-on-error: true # ✅ Permite que continúe si solo hay falsos positivos (como 'environment')
+
+      # --- Summary ---
       - name: Summary
+        shell: bash
         run: |
           {
             echo "## Image pushed"
-            echo "- Registry: \`${{ env.ACR_LOGIN_SERVER }}\`"
-            echo "- Image: \`${{ env.ACR_LOGIN_SERVER }}/${{ vars.IMAGE_NAME || github.event.repository.name }}\`"
+            echo "- Registry: ${ACR_LOGIN_SERVER}"
+            echo "- Image: ${ACR_LOGIN_SERVER}/${{ vars.IMAGE_NAME || github.event.repository.name }}"
             echo "- Tags:"
             echo '${{ steps.meta.outputs.tags }}' | tr ' ' '\n'
           } >> "$GITHUB_STEP_SUMMARY"
