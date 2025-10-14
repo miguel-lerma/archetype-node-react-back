@@ -31,7 +31,6 @@ jobs:
               level: error
             new-line-at-end-of-file:
               level: error
-            # Reglas ruidosas para GH expressions:
             colons: disable
             braces: disable
             line-length: disable
@@ -51,25 +50,11 @@ jobs:
 
       - name: actionlint
         uses: rhysd/actionlint@v1.6.27
+        # (sin inputs extras para evitar el warning de "Unexpected input(s) 'shellcheck'")
 
-  build:
-    name: Build
+  build-and-push:
+    name: Build & Push
     runs-on: ubuntu-latest
-    env:
-      APP_VERSION: sha-${{ github.sha }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Docker build
-        run: |
-          docker build -t ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} .
-
-  push-acr:
-    name: Push image to ACR (develop only)
-    if: ${{ github.ref == 'refs/heads/develop' }}
-    runs-on: ubuntu-latest
-    environment: dev
     env:
       APP_VERSION: sha-${{ github.sha }}
       REGISTRY: ${{ vars.ACR_LOGIN_SERVER }}
@@ -77,8 +62,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Login a Azure usando tus vars del Environment 'dev'
-      - name: Azure Login (Service Principal federado)
+      # Login a Azure solo si hay credenciales vía repository/environment vars (sin secrets)
+      - name: Azure Login (SPN federado vía vars)
+        if: ${{ vars.AZURE_CLIENT_ID && vars.AZURE_TENANT_ID && vars.AZURE_SUBSCRIPTION_ID }}
         uses: azure/login@v2
         with:
           auth-type: SERVICE_PRINCIPAL
@@ -86,49 +72,54 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Re-build image (etiqueta con el sha)
+      - name: Docker build
         run: |
           docker build -t ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} .
 
+      # Login a ACR usando az + login server (sin secrets). Requiere que el SPN tenga AcrPush.
       - name: ACR login (az acr login)
+        if: ${{ env.REGISTRY && vars.AZURE_SUBSCRIPTION_ID }}
         run: |
-          if [ -z "${{ env.REGISTRY }}" ]; then
-            echo "ACR_LOGIN_SERVER vacío"; exit 1
-          fi
-          ACR_NAME="${{ env.REGISTRY%%.azurecr.io }}"
+          ACR_LOGIN_SERVER="${{ env.REGISTRY }}"
+          ACR_NAME="${ACR_LOGIN_SERVER%%.azurecr.io}"
           az acr login --name "$ACR_NAME"
 
       - name: Docker tag & push
+        if: ${{ env.REGISTRY }}
         run: |
-          docker tag ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
+          docker tag  ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
 
   deploy-dev:
     name: Deploy DEV
+    needs: [build-and-push]
     if: ${{ github.ref == 'refs/heads/develop' }}
-    needs:
-      - push-acr
+    # <<<<<<<<<< clave: atar el job al environment para que se hidraten los environment vars
+    environment: dev
     uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
+    # opcional pero recomendable si el reusable necesita GITHUB_TOKEN o algún secreto
+    secrets: inherit
     with:
       environment: dev
 
-      # Imagen ya empujada al ACR (registry + repo + tag)
+      # Imagen que se empujó en el job anterior (ahora con registry)
       image_ref: ${{ vars.ACR_LOGIN_SERVER }}/archetype-node-react-back:sha-${{ github.sha }}
 
-      # Parámetros mapeados a TUS nombres reales
-      ingress: ${{ vars.INGRESS }}
-      target_port: ${{ vars.TARGET_PORT }}
-      cpu: ${{ vars.CPU }}
-      memory: ${{ vars.MEMORY }}
-      min_replicas: ${{ vars.MIN_REPLICAS }}
-      max_replicas: ${{ vars.MAX_REPLICAS }}
+      # Parámetros opcionales (vacíos por ahora, como los traías)
+      ingress: ''
+      target_port: ''
+      cpu: ''
+      memory: ''
+      min_replicas: ''
+      max_replicas: ''
 
+      # Env extras (igual que antes)
       extra_env: |
         NODE_ENV=development
-        APP_ENV=${{ vars.APP_ENV }}
+        APP_ENV=develop
         HTTP_CONCURRENCY=${{ vars.HTTP_CONCURRENCY }}
 
-      # Credenciales y recursos de Azure (tus keys)
+      # Solo repository/environment vars, nada de 'secrets'
       azure_client_id: ${{ vars.AZURE_CLIENT_ID }}
       azure_tenant_id: ${{ vars.AZURE_TENANT_ID }}
       azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
