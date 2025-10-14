@@ -91,16 +91,18 @@ jobs:
 
       - name: ACR login (az acr login)
         run: |
-          if [ -z "${{ env.REGISTRY }}" ]; then
+          if [ -z "${REGISTRY}" ]; then
             echo "ACR_LOGIN_SERVER vacío"; exit 1
           fi
-          ACR_NAME="${{ env.REGISTRY%%.azurecr.io }}"
+          # OJO: la expansión '%%' es de Bash, NO de ${{ }}.
+          ACR_LOGIN_SERVER="${REGISTRY}"
+          ACR_NAME="${ACR_LOGIN_SERVER%%.azurecr.io}"
           az acr login --name "$ACR_NAME"
 
       - name: Docker tag & push
         run: |
-          docker tag  ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
-          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
+          docker tag  ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
+          docker push ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
 
   deploy-dev:
     name: Deploy DEV
@@ -108,7 +110,6 @@ jobs:
     needs: [push-acr]
     environment: dev
     uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
-    secrets: inherit
     with:
       environment: dev
 
