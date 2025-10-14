@@ -13,141 +13,97 @@ permissions:
 
 jobs:
   deploy-dev:
-    # Solo cuando el CI terminó OK y la rama es develop
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'develop' }}
-    runs-on: ubuntu-latest
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
     environment: dev
-    steps:
-      - name: Checkout (repo del proyecto)
-        uses: actions/checkout@v4
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      environment: dev
 
-      - name: Derivar valores
-        id: ctx
-        shell: bash
-        env:
-          ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER || secrets.ACR_LOGIN_SERVER }}
-          IMAGE_NAME: ${{ vars.IMAGE_NAME || github.event.repository.name }}
-          SHA: ${{ github.event.workflow_run.head_sha }}
-        run: |
-          [ -n "$ACR_LOGIN_SERVER" ] || { echo "ACR_LOGIN_SERVER vacío en env DEV"; exit 1; }
-          [ -n "$IMAGE_NAME" ] || { echo "IMAGE_NAME vacío"; exit 1; }
-          echo "acr_login_server=$ACR_LOGIN_SERVER" >> "$GITHUB_OUTPUT"
-          echo "image_name=$IMAGE_NAME" >> "$GITHUB_OUTPUT"
-          echo "image_ref=$ACR_LOGIN_SERVER/$IMAGE_NAME:sha-$SHA" >> "$GITHUB_OUTPUT"
+      # ---- Azure (OIDC)
+      azure_client_id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      azure_tenant_id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Deploy (dev) - reusable workflow
-        uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
-        with:
-          environment: dev
-          # ---- Azure (OIDC)
-          azure_client_id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
-          azure_tenant_id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
-          azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
-          # ---- Destino
-          resource_group: ${{ vars.AZURE_RG }}
-          aca_environment: ${{ vars.ACA_ENV }}
-          location: ${{ vars.AZURE_LOCATION || 'eastus' }}
-          # ---- App & imagen
-          app_name: ${{ vars.ACA_APP_NAME }}
-          image_ref: ${{ steps.ctx.outputs.image_ref }}
-          # ---- Ingress / puerto
-          ingress: ${{ vars.ACA_INGRESS || 'external' }}
-          target_port: ${{ vars.ACA_PORT || '3000' }}
-          # ---- Escala / recursos
-          cpu: ${{ vars.ACA_CPU || '0.5' }}
-          memory: ${{ vars.ACA_MEMORY || '1Gi' }}
-          min_replicas: ${{ vars.ACA_MIN_REPLICAS || '1' }}
-          max_replicas: ${{ vars.ACA_MAX_REPLICAS || '3' }}
-          # ---- Opcionales
-          extra_env: |
-            NODE_ENV=development
-          acr_login_server: ${{ steps.ctx.outputs.acr_login_server }}
-          acr_identity_client_id: ${{ vars.ACR_PULL_IDENTITY_CLIENT_ID || '' }}
+      # ---- Destino
+      resource_group: ${{ vars.AZURE_RG }}
+      aca_environment: ${{ vars.ACA_ENV }}
+      location: ${{ vars.AZURE_LOCATION || 'eastus' }}
+
+      # ---- App & imagen
+      app_name: ${{ vars.ACA_APP_NAME }}
+      image_ref: ${{ (vars.ACR_LOGIN_SERVER || secrets.ACR_LOGIN_SERVER) }}/${{ vars.IMAGE_NAME || github.event.repository.name }}:sha-${{ github.event.workflow_run.head_sha }}
+
+      # ---- Ingress / puerto
+      ingress: ${{ vars.ACA_INGRESS || 'external' }}
+      target_port: ${{ vars.ACA_PORT || '3000' }}
+
+      # ---- Escala / recursos
+      cpu: ${{ vars.ACA_CPU || '0.5' }}
+      memory: ${{ vars.ACA_MEMORY || '1Gi' }}
+      min_replicas: ${{ vars.ACA_MIN_REPLICAS || '1' }}
+      max_replicas: ${{ vars.ACA_MAX_REPLICAS || '3' }}
+
+      # ---- Opcionales
+      extra_env: |
+        NODE_ENV=development
+      acr_login_server: ${{ vars.ACR_LOGIN_SERVER || secrets.ACR_LOGIN_SERVER }}
+      acr_identity_client_id: ${{ vars.ACR_PULL_IDENTITY_CLIENT_ID || '' }}
 
   deploy-staging:
-    # Solo cuando el CI terminó OK y la rama es staging o release/*
     if: ${{ github.event.workflow_run.conclusion == 'success' && (github.event.workflow_run.head_branch == 'staging' || startsWith(github.event.workflow_run.head_branch, 'release/')) }}
-    runs-on: ubuntu-latest
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
     environment: stg
-    steps:
-      - uses: actions/checkout@v4
-      - name: Derivar valores
-        id: ctx
-        shell: bash
-        env:
-          ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER || secrets.ACR_LOGIN_SERVER }}
-          IMAGE_NAME: ${{ vars.IMAGE_NAME || github.event.repository.name }}
-          SHA: ${{ github.event.workflow_run.head_sha }}
-        run: |
-          [ -n "$ACR_LOGIN_SERVER" ] || { echo "ACR_LOGIN_SERVER vacío en env STG"; exit 1; }
-          [ -n "$IMAGE_NAME" ] || { echo "IMAGE_NAME vacío"; exit 1; }
-          echo "acr_login_server=$ACR_LOGIN_SERVER" >> "$GITHUB_OUTPUT"
-          echo "image_name=$IMAGE_NAME" >> "$GITHUB_OUTPUT"
-          echo "image_ref=$ACR_LOGIN_SERVER/$IMAGE_NAME:sha-$SHA" >> "$GITHUB_OUTPUT"
-
-      - name: Deploy (staging)
-        uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
-        with:
-          environment: stg
-          azure_client_id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
-          azure_tenant_id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
-          azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
-          resource_group: ${{ vars.AZURE_RG }}
-          aca_environment: ${{ vars.ACA_ENV }}
-          location: ${{ vars.AZURE_LOCATION || 'eastus' }}
-          app_name: ${{ vars.ACA_APP_NAME }}
-          image_ref: ${{ steps.ctx.outputs.image_ref }}
-          ingress: ${{ vars.ACA_INGRESS || 'external' }}
-          target_port: ${{ vars.ACA_PORT || '3000' }}
-          cpu: ${{ vars.ACA_CPU || '0.5' }}
-          memory: ${{ vars.ACA_MEMORY || '1Gi' }}
-          min_replicas: ${{ vars.ACA_MIN_REPLICAS || '1' }}
-          max_replicas: ${{ vars.ACA_MAX_REPLICAS || '3' }}
-          extra_env: |
-            NODE_ENV=staging
-          acr_login_server: ${{ steps.ctx.outputs.acr_login_server }}
-          acr_identity_client_id: ${{ vars.ACR_PULL_IDENTITY_CLIENT_ID || '' }}
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      environment: stg
+      azure_client_id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      azure_tenant_id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+      resource_group: ${{ vars.AZURE_RG }}
+      aca_environment: ${{ vars.ACA_ENV }}
+      location: ${{ vars.AZURE_LOCATION || 'eastus' }}
+      app_name: ${{ vars.ACA_APP_NAME }}
+      image_ref: ${{ (vars.ACR_LOGIN_SERVER || secrets.ACR_LOGIN_SERVER) }}/${{ vars.IMAGE_NAME || github.event.repository.name }}:sha-${{ github.event.workflow_run.head_sha }}
+      ingress: ${{ vars.ACA_INGRESS || 'external' }}
+      target_port: ${{ vars.ACA_PORT || '3000' }}
+      cpu: ${{ vars.ACA_CPU || '0.5' }}
+      memory: ${{ vars.ACA_MEMORY || '1Gi' }}
+      min_replicas: ${{ vars.ACA_MIN_REPLICAS || '1' }}
+      max_replicas: ${{ vars.ACA_MAX_REPLICAS || '3' }}
+      extra_env: |
+        NODE_ENV=staging
+      acr_login_server: ${{ vars.ACR_LOGIN_SERVER || secrets.ACR_LOGIN_SERVER }}
+      acr_identity_client_id: ${{ vars.ACR_PULL_IDENTITY_CLIENT_ID || '' }}
 
   deploy-prod:
-    # Solo cuando el CI terminó OK y la rama es main o hotfix/*
     if: ${{ github.event.workflow_run.conclusion == 'success' && (github.event.workflow_run.head_branch == 'main' || startsWith(github.event.workflow_run.head_branch, 'hotfix/')) }}
-    runs-on: ubuntu-latest
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
     environment: prd
-    steps:
-      - uses: actions/checkout@v4
-      - name: Derivar valores
-        id: ctx
-        shell: bash
-        env:
-          ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER || secrets.ACR_LOGIN_SERVER }}
-          IMAGE_NAME: ${{ vars.IMAGE_NAME || github.event.repository.name }}
-          SHA: ${{ github.event.workflow_run.head_sha }}
-        run: |
-          [ -n "$ACR_LOGIN_SERVER" ] || { echo "ACR_LOGIN_SERVER vacío en env PRD"; exit 1; }
-          [ -n "$IMAGE_NAME" ] || { echo "IMAGE_NAME vacío"; exit 1; }
-          echo "acr_login_server=$ACR_LOGIN_SERVER" >> "$GITHUB_OUTPUT"
-          echo "image_name=$IMAGE_NAME" >> "$GITHUB_OUTPUT"
-          echo "image_ref=$ACR_LOGIN_SERVER/$IMAGE_NAME:sha-$SHA" >> "$GITHUB_OUTPUT"
-
-      - name: Deploy (prod)
-        uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
-        with:
-          environment: prd
-          azure_client_id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
-          azure_tenant_id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
-          azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
-          resource_group: ${{ vars.AZURE_RG }}
-          aca_environment: ${{ vars.ACA_ENV }}
-          location: ${{ vars.AZURE_LOCATION || 'eastus' }}
-          app_name: ${{ vars.ACA_APP_NAME }}
-          image_ref: ${{ steps.ctx.outputs.image_ref }}
-          ingress: ${{ vars.ACA_INGRESS || 'external' }}
-          target_port: ${{ vars.ACA_PORT || '3000' }}
-          cpu: ${{ vars.ACA_CPU || '0.5' }}
-          memory: ${{ vars.ACA_MEMORY || '1Gi' }}
-          min_replicas: ${{ vars.ACA_MIN_REPLICAS || '2' }}
-          max_replicas: ${{ vars.ACA_MAX_REPLICAS || '5' }}
-          extra_env: |
-            NODE_ENV=production
-          acr_login_server: ${{ steps.ctx.outputs.acr_login_server }}
-          acr_identity_client_id: ${{ vars.ACR_PULL_IDENTITY_CLIENT_ID || '' }}
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      environment: prd
+      azure_client_id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      azure_tenant_id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+      resource_group: ${{ vars.AZURE_RG }}
+      aca_environment: ${{ vars.ACA_ENV }}
+      location: ${{ vars.AZURE_LOCATION || 'eastus' }}
+      app_name: ${{ vars.ACA_APP_NAME }}
+      image_ref: ${{ (vars.ACR_LOGIN_SERVER || secrets.ACR_LOGIN_SERVER) }}/${{ vars.IMAGE_NAME || github.event.repository.name }}:sha-${{ github.event.workflow_run.head_sha }}
+      ingress: ${{ vars.ACA_INGRESS || 'external' }}
+      target_port: ${{ vars.ACA_PORT || '3000' }}
+      cpu: ${{ vars.ACA_CPU || '0.5' }}
+      memory: ${{ vars.ACA_MEMORY || '1Gi' }}
+      min_replicas: ${{ vars.ACA_MIN_REPLICAS || '2' }}
+      max_replicas: ${{ vars.ACA_MAX_REPLICAS || '5' }}
+      extra_env: |
+        NODE_ENV=production
+      acr_login_server: ${{ vars.ACR_LOGIN_SERVER || secrets.ACR_LOGIN_SERVER }}
+      acr_identity_client_id: ${{ vars.ACR_PULL_IDENTITY_CLIENT_ID || '' }}
