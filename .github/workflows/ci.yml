@@ -1,5 +1,5 @@
 ---
-name: CI
+name: CI/CD
 
 on:
   push:
@@ -13,12 +13,12 @@ env:
   IMAGE_NAME: archetype-node-react-back
 
 jobs:
+  # ---------- LINT ----------
   lint:
     name: Lint (YAML + actionlint)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Crear configuración de yamllint
         run: |
@@ -31,7 +31,7 @@ jobs:
               level: error
             new-line-at-end-of-file:
               level: error
-            # Reglas ruidosas para GH expressions:
+            # Evitar falsos positivos con expresiones de GH:
             colons: disable
             braces: disable
             line-length: disable
@@ -52,32 +52,32 @@ jobs:
       - name: actionlint
         uses: rhysd/actionlint@v1.6.27
 
+  # ---------- BUILD (siempre) ----------
   build:
     name: Build
     runs-on: ubuntu-latest
     env:
       APP_VERSION: sha-${{ github.sha }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Docker build
-        run: |
-          docker build -t ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} .
+        run: docker build -t ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} .
 
-  push-acr:
-    name: Push image to ACR (develop only)
+  # ---------- PUSH ACR (DEV) ----------
+  push-acr-dev:
+    name: Push image to ACR (develop → dev)
     if: ${{ github.ref == 'refs/heads/develop' }}
     runs-on: ubuntu-latest
     environment: dev
+    outputs:
+      image_ref: ${{ steps.make_ref.outputs.image_ref }}
     env:
       APP_VERSION: sha-${{ github.sha }}
       REGISTRY: ${{ vars.ACR_LOGIN_SERVER }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Azure Login (Service Principal federado)
+      - name: Azure Login (SPN federado)
         uses: azure/login@v2
         with:
           auth-type: SERVICE_PRINCIPAL
@@ -85,38 +85,38 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Re-build image (etiqueta con el sha)
-        run: |
-          docker build -t ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} .
+      - name: Build (asegurar tag)
+        run: docker build -t ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} .
 
-      - name: ACR login (az acr login)
+      - name: ACR login
         run: |
           if [ -z "${REGISTRY}" ]; then
             echo "ACR_LOGIN_SERVER vacío"; exit 1
           fi
-          # La expansión '%%' es de Bash, NO de ${{ }}.
-          ACR_LOGIN_SERVER="${REGISTRY}"
-          ACR_NAME="${ACR_LOGIN_SERVER%%.azurecr.io}"
+          ACR_NAME="${REGISTRY%%.azurecr.io}"
           az acr login --name "$ACR_NAME"
 
-      - name: Docker tag & push
+      - name: Push image
         run: |
           docker tag  ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
           docker push ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
 
+      - name: Publicar image_ref (output)
+        id: make_ref
+        run: |
+          echo "image_ref=${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}" >> "$GITHUB_OUTPUT"
+
+  # ---------- DEPLOY DEV ----------
   deploy-dev:
     name: Deploy DEV
     if: ${{ github.ref == 'refs/heads/develop' }}
-    needs: [push-acr]
+    needs: [push-acr-dev]
     environment: dev
     uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
     with:
       environment: dev
+      image_ref: ${{ needs.push-acr-dev.outputs.image_ref }}
 
-      # Construir el valor con UNA sola expresión usando format()
-      image_ref: ${{ format('{0}/archetype-node-react-back:sha-{1}', vars.ACR_LOGIN_SERVER, github.sha) }}
-
-      # Parámetros mapeados a tus vars
       ingress: ${{ vars.INGRESS }}
       target_port: ${{ vars.TARGET_PORT }}
       cpu: ${{ vars.CPU }}
@@ -136,6 +136,157 @@ jobs:
       aca_environment: ${{ vars.ACA_ENV_NAME }}
       location: ${{ vars.AZ_LOCATION }}
       app_name: ${{ vars.APP_NAME }}
+      acr_login_server: ${{ vars.ACR_LOGIN_SERVER }}
+      acr_identity_client_id: ${{ vars.ACR_IDENTITY_CLIENT_ID }}
 
+  # ---------- PUSH ACR (QA) ----------
+  push-acr-qa:
+    name: Push image to ACR (release/* → qa)
+    if: ${{ startsWith(github.ref, 'refs/heads/release/') }}
+    runs-on: ubuntu-latest
+    environment: qa
+    outputs:
+      image_ref: ${{ steps.make_ref.outputs.image_ref }}
+    env:
+      APP_VERSION: sha-${{ github.sha }}
+      REGISTRY: ${{ vars.ACR_LOGIN_SERVER }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login (SPN federado)
+        uses: azure/login@v2
+        with:
+          auth-type: SERVICE_PRINCIPAL
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build (asegurar tag)
+        run: docker build -t ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} .
+
+      - name: ACR login
+        run: |
+          if [ -z "${REGISTRY}" ]; then
+            echo "ACR_LOGIN_SERVER vacío"; exit 1
+          fi
+          ACR_NAME="${REGISTRY%%.azurecr.io}"
+          az acr login --name "$ACR_NAME"
+
+      - name: Push image
+        run: |
+          docker tag  ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
+          docker push ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
+
+      - name: Publicar image_ref (output)
+        id: make_ref
+        run: |
+          echo "image_ref=${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}" >> "$GITHUB_OUTPUT"
+
+  # ---------- DEPLOY QA ----------
+  deploy-qa:
+    name: Deploy QA
+    if: ${{ startsWith(github.ref, 'refs/heads/release/') }}
+    needs: [push-acr-qa]
+    environment: qa
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
+    with:
+      environment: qa
+      image_ref: ${{ needs.push-acr-qa.outputs.image_ref }}
+
+      ingress: ${{ vars.INGRESS }}
+      target_port: ${{ vars.TARGET_PORT }}
+      cpu: ${{ vars.CPU }}
+      memory: ${{ vars.MEMORY }}
+      min_replicas: ${{ vars.MIN_REPLICAS }}
+      max_replicas: ${{ vars.MAX_REPLICAS }}
+
+      extra_env: |
+        NODE_ENV=production
+        APP_ENV=${{ vars.APP_ENV }}
+        HTTP_CONCURRENCY=${{ vars.HTTP_CONCURRENCY }}
+
+      azure_client_id: ${{ vars.AZURE_CLIENT_ID }}
+      azure_tenant_id: ${{ vars.AZURE_TENANT_ID }}
+      azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      resource_group: ${{ vars.AZ_RESOURCE_GROUP }}
+      aca_environment: ${{ vars.ACA_ENV_NAME }}
+      location: ${{ vars.AZ_LOCATION }}
+      app_name: ${{ vars.APP_NAME }}
+      acr_login_server: ${{ vars.ACR_LOGIN_SERVER }}
+      acr_identity_client_id: ${{ vars.ACR_IDENTITY_CLIENT_ID }}
+
+  # ---------- PUSH ACR (PROD) ----------
+  push-acr-prod:
+    name: Push image to ACR (main → prod)
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    environment: prod
+    outputs:
+      image_ref: ${{ steps.make_ref.outputs.image_ref }}
+    env:
+      APP_VERSION: sha-${{ github.sha }}
+      REGISTRY: ${{ vars.ACR_LOGIN_SERVER }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login (SPN federado)
+        uses: azure/login@v2
+        with:
+          auth-type: SERVICE_PRINCIPAL
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build (asegurar tag)
+        run: docker build -t ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} .
+
+      - name: ACR login
+        run: |
+          if [ -z "${REGISTRY}" ]; then
+            echo "ACR_LOGIN_SERVER vacío"; exit 1
+          fi
+          ACR_NAME="${REGISTRY%%.azurecr.io}"
+          az acr login --name "$ACR_NAME"
+
+      - name: Push image
+        run: |
+          docker tag  ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
+          docker push ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
+
+      - name: Publicar image_ref (output)
+        id: make_ref
+        run: |
+          echo "image_ref=${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}" >> "$GITHUB_OUTPUT"
+
+  # ---------- DEPLOY PROD ----------
+  deploy-prod:
+    name: Deploy PROD
+    if: ${{ github.ref == 'refs/heads/main' }}
+    needs: [push-acr-prod]
+    environment: prod
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
+    with:
+      environment: prod
+      image_ref: ${{ needs.push-acr-prod.outputs.image_ref }}
+
+      ingress: ${{ vars.INGRESS }}
+      target_port: ${{ vars.TARGET_PORT }}
+      cpu: ${{ vars.CPU }}
+      memory: ${{ vars.MEMORY }}
+      min_replicas: ${{ vars.MIN_REPLICAS }}
+      max_replicas: ${{ vars.MAX_REPLICAS }}
+
+      extra_env: |
+        NODE_ENV=production
+        APP_ENV=${{ vars.APP_ENV }}
+        HTTP_CONCURRENCY=${{ vars.HTTP_CONCURRENCY }}
+
+      azure_client_id: ${{ vars.AZURE_CLIENT_ID }}
+      azure_tenant_id: ${{ vars.AZURE_TENANT_ID }}
+      azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      resource_group: ${{ vars.AZ_RESOURCE_GROUP }}
+      aca_environment: ${{ vars.ACA_ENV_NAME }}
+      location: ${{ vars.AZ_LOCATION }}
+      app_name: ${{ vars.APP_NAME }}
       acr_login_server: ${{ vars.ACR_LOGIN_SERVER }}
       acr_identity_client_id: ${{ vars.ACR_IDENTITY_CLIENT_ID }}
