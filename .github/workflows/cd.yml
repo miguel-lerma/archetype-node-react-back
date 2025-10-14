@@ -6,7 +6,7 @@ on:
     branches: ["develop"]
   workflow_dispatch:
 
-# Necesario para OIDC y para poder leer variables
+# Necesario para OIDC y poder leer variables/vars
 permissions:
   id-token: write
   contents: read
@@ -15,50 +15,126 @@ concurrency:
   group: deploy-dev-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Config destino
+  RESOURCE_GROUP: ITX-RG-01
+  ACA_ENVIRONMENT: env-lab-aca
+  LOCATION: eastus
+  APP_NAME: be-dev
+  IMAGE_REPOSITORY: archetype-back  # nombre del repo en tu ACR (sin el login server)
+
 jobs:
   deploy:
     name: Deploy to DEV
-    # IMPORTANTE: esto habilita las variables del Environment "dev"
-    environment: dev
+    runs-on: ubuntu-latest
+    environment: dev   # habilita ${{ vars.* }} del Environment "dev"
 
-    # Reusable workflow en el repo pipelines
-    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    # (opcional) puedes repetir permisos aquí si tu reusable no los define
-    permissions:
-      id-token: write
-      contents: read
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-    with:
-      # Selección del environment para el reusable (puede condicionar inputs internos)
-      environment: dev
-      commit_sha: ${{ github.sha }}
+      - name: Preparar variables de imagen
+        id: prep
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="${{ github.sha }}"
+          img="${{ vars.ACR_LOGIN_SERVER }}/${{ env.IMAGE_REPOSITORY }}:sha-${sha}"
+          {
+            printf 'sha=%s\n' "$sha"
+            printf 'image=%s\n' "$img"
+          } >> "$GITHUB_OUTPUT"
 
-      # Azure / OIDC (se leen de variables del Environment 'dev')
-      azure_client_id: ${{ vars.AZURE_CLIENT_ID }}
-      azure_tenant_id: ${{ vars.AZURE_TENANT_ID }}
-      azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Instalar/actualizar extensión containerapp
+        shell: bash
+        run: |
+          set -euo pipefail
+          az version
+          if ! az extension show --name containerapp >/dev/null 2>&1; then
+            az extension add --name containerapp -y
+          else
+            az extension update --name containerapp -y || true
+          fi
 
-      # Destino
-      resource_group: ITX-RG-01
-      aca_environment: env-lab-aca
-      location: eastus
-      app_name: be-dev
+      - name: Validaciones rápidas de recursos
+        shell: bash
+        env:
+          RG: ${{ env.RESOURCE_GROUP }}
+          ACA_ENV: ${{ env.ACA_ENVIRONMENT }}
+          APP: ${{ env.APP_NAME }}
+          ACR_LOGIN: ${{ vars.ACR_LOGIN_SERVER }}
+        run: |
+          set -euo pipefail
+          az group show -n "$RG" -o none
+          az containerapp env show -g "$RG" -n "$ACA_ENV" -o none
+          az containerapp show -g "$RG" -n "$APP" -o none
+          if [ -n "${ACR_LOGIN:-}" ]; then
+            ACR_NAME="${ACR_LOGIN%%.azurecr.io}"
+            az acr show -n "$ACR_NAME" -o none
+          fi
 
-      # ACR + MI de la ACA para pulls
-      acr_login_server: itxzacrlab01.azurecr.io
-      acr_identity_client_id: ${{ vars.ACA_MI_CLIENT_ID }}
+      - name: Asociar ACR + identidad (si aplica)
+        if: ${{ vars.ACR_LOGIN_SERVER != '' && vars.ACA_MI_CLIENT_ID != '' }}
+        shell: bash
+        env:
+          RG: ${{ env.RESOURCE_GROUP }}
+          APP: ${{ env.APP_NAME }}
+          ACR_LOGIN: ${{ vars.ACR_LOGIN_SERVER }}
+          ACR_MI: ${{ vars.ACA_MI_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          # NOTA: algunos az CLI no aceptan --yes en este comando; lo omitimos.
+          az containerapp registry set \
+            -g "$RG" -n "$APP" \
+            --server "$ACR_LOGIN" \
+            --identity "$ACR_MI"
 
-      # Repo de la imagen dentro de ACR (sin el login server)
-      image_repository: archetype-back
+      - name: Desplegar imagen en la ACA
+        shell: bash
+        env:
+          RG: ${{ env.RESOURCE_GROUP }}
+          APP: ${{ env.APP_NAME }}
+          IMAGE_REF: ${{ steps.prep.outputs.image }}
+          INGRESS: ""
+          TARGET_PORT: ""
+          CPU: ""
+          MEMORY: ""
+          MIN_REPLICAS: ""
+          MAX_REPLICAS: ""
+          EXTRA_ENV: |
+            NODE_ENV=production
+            LOG_LEVEL=info
+        run: |
+          set -euo pipefail
 
-      # Opcionales (vacíos = no cambian lo existente)
-      ingress: ""
-      target_port: ""
-      cpu: ""
-      memory: ""
-      min_replicas: ""
-      max_replicas: ""
-      extra_env: |
-        NODE_ENV=production
-        LOG_LEVEL=info
+          echo "Imagen a desplegar: $IMAGE_REF"
+
+          PARAMS=( -g "$RG" -n "$APP" --image "$IMAGE_REF" )
+
+          [ -n "${INGRESS:-}" ]      && PARAMS+=( --ingress "$INGRESS" )
+          [ -n "${TARGET_PORT:-}" ]  && PARAMS+=( --target-port "$TARGET_PORT" )
+          [ -n "${CPU:-}" ]          && PARAMS+=( --cpu "$CPU" )
+          [ -n "${MEMORY:-}" ]       && PARAMS+=( --memory "$MEMORY" )
+          [ -n "${MIN_REPLICAS:-}" ] && PARAMS+=( --min-replicas "$MIN_REPLICAS" )
+          [ -n "${MAX_REPLICAS:-}" ] && PARAMS+=( --max-replicas "$MAX_REPLICAS" )
+
+          if [ -n "${EXTRA_ENV:-}" ]; then
+            while IFS= read -r line; do
+              [ -z "$line" ] && continue
+              PARAMS+=( --set-env-vars "$line" )
+            done <<< "$EXTRA_ENV"
+          fi
+
+          az containerapp update "${PARAMS[@]}"
+          echo "✅ Deploy completado."
+
+      - name: Logout Azure (limpieza)
+        if: always()
+        run: az account clear || true
