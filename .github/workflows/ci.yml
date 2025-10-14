@@ -1,5 +1,5 @@
 ---
-name: CI (Backend)
+name: CI - Build & Push Image
 
 on:
   pull_request:
@@ -103,4 +103,3 @@ jobs:
             echo "- Tags:"
             echo '${{ steps.meta.outputs.tags }}' | tr ' ' '\n'
           } >> "$GITHUB_STEP_SUMMARY"
-
