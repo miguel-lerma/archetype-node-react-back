@@ -1,57 +1,138 @@
 ---
-name: CD - Deploy to Azure Container Apps
+name: CD - Deploy to ACA (auto by branch)
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI - Build & Push Image"]   # <-- nombre EXACTO de tu CI
+    types: [completed]
     branches:
-      - main        # ← ajusta si usas otra rama (e.g. develop)
-  workflow_dispatch: {}
+      - main
+      - develop
+      - release/**
+      - hotfix/**
 
-# Permisos en el caller (recomendado al usar OIDC + reusable)
 permissions:
   id-token: write
   contents: read
 
+# Evita solapes por ambiente
+concurrency:
+  group: cd-aca-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
 jobs:
-  deploy:
-    name: Deploy to ACA (reusable)
+  # ============== DEV (ej. rama develop) ==============
+  deploy-dev:
+    if: >
+      ${{
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'develop'
+      }}
     uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
-    # Si tu reusable necesitara secretos del caller, esto los pasa.
     secrets: inherit
     with:
-      # --- Contexto / Environment (opcional) ---
       environment: dev
 
-      # --- OIDC / Azure ---
-      azure_client_id: ${{ vars.AZURE_CLIENT_ID }}
-      azure_tenant_id: ${{ vars.AZURE_TENANT_ID }}
-      azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      # --- OIDC / Subs ---
+      azure_client_id:        ${{ vars.AZURE_CLIENT_ID }}
+      azure_tenant_id:        ${{ vars.AZURE_TENANT_ID }}
+      azure_subscription_id:  ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # --- Destino ---
-      resource_group: ${{ vars.AZURE_RESOURCE_GROUP }}
-      aca_environment: ${{ vars.ACA_ENVIRONMENT }}
-      location: ${{ vars.AZURE_LOCATION }}
+      # --- Destino DEV ---
+      resource_group:   ${{ vars.AZURE_RESOURCE_GROUP_DEV }}
+      aca_environment:  ${{ vars.ACA_ENVIRONMENT_DEV }}
+      location:         ${{ vars.AZURE_LOCATION }}
 
-      # --- App e imagen ---
-      app_name: ${{ vars.ACA_APP_NAME }}
-      # Tag inmutable por commit para despliegues repetibles
-      image_ref: ${{ vars.ACR_LOGIN_SERVER }}/${{ vars.IMAGE_NAME || 'archetype-node-react-back' }}:${{ github.sha }}
+      # --- App / Imagen (mismo SHA del CI que terminó) ---
+      app_name:         ${{ vars.ACA_APP_NAME_DEV }}
+      image_ref:        ${{ vars.ACR_LOGIN_SERVER }}/${{ vars.IMAGE_NAME }}:${{ github.event.workflow_run.head_sha }}
 
-      # --- Ingress/puerto ---
-      ingress: external
-      target_port: "3000"
+      # --- Runtime DEV ---
+      ingress:          ${{ vars.ACA_INGRESS_DEV || 'external' }}
+      target_port:      ${{ vars.ACA_TARGET_PORT || '3000' }}
+      cpu:              ${{ vars.ACA_CPU_DEV || '0.5' }}
+      memory:           ${{ vars.ACA_MEMORY_DEV || '1Gi' }}
+      min_replicas:     ${{ vars.ACA_MIN_REPLICAS_DEV || '1' }}
+      max_replicas:     ${{ vars.ACA_MAX_REPLICAS_DEV || '3' }}
 
-      # --- Escala/recursos ---
-      cpu: "0.5"
-      memory: "1Gi"
-      min_replicas: "1"
-      max_replicas: "3"
+      # --- Registry (si aplica) ---
+      acr_login_server:        ${{ vars.ACR_LOGIN_SERVER }}
+      acr_identity_client_id:  ${{ vars.ACR_IDENTITY_CLIENT_ID }}
 
-      # --- Registry (opcional, si tu ACA no lo tiene seteado) ---
-      acr_login_server: ${{ vars.ACR_LOGIN_SERVER }}
-      acr_identity_client_id: ${{ vars.ACR_IDENTITY_CLIENT_ID }}
+      extra_env: |
+        NODE_ENV=development
 
-      # --- Variables extra (opcional) ---
+  # ============== STAGING (ej. ramas release/*) ==============
+  deploy-staging:
+    if: >
+      ${{
+        github.event.workflow_run.conclusion == 'success' &&
+        startsWith(github.event.workflow_run.head_branch, 'release/')
+      }}
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
+    secrets: inherit
+    with:
+      environment: staging
+
+      azure_client_id:        ${{ vars.AZURE_CLIENT_ID }}
+      azure_tenant_id:        ${{ vars.AZURE_TENANT_ID }}
+      azure_subscription_id:  ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      resource_group:   ${{ vars.AZURE_RESOURCE_GROUP_STG }}
+      aca_environment:  ${{ vars.ACA_ENVIRONMENT_STG }}
+      location:         ${{ vars.AZURE_LOCATION }}
+
+      app_name:         ${{ vars.ACA_APP_NAME_STG }}
+      image_ref:        ${{ vars.ACR_LOGIN_SERVER }}/${{ vars.IMAGE_NAME }}:${{ github.event.workflow_run.head_sha }}
+
+      ingress:          ${{ vars.ACA_INGRESS_STG || 'external' }}
+      target_port:      ${{ vars.ACA_TARGET_PORT || '3000' }}
+      cpu:              ${{ vars.ACA_CPU_STG || '1' }}
+      memory:           ${{ vars.ACA_MEMORY_STG || '2Gi' }}
+      min_replicas:     ${{ vars.ACA_MIN_REPLICAS_STG || '1' }}
+      max_replicas:     ${{ vars.ACA_MAX_REPLICAS_STG || '3' }}
+
+      acr_login_server:        ${{ vars.ACR_LOGIN_SERVER }}
+      acr_identity_client_id:  ${{ vars.ACR_IDENTITY_CLIENT_ID }}
+
+      extra_env: |
+        NODE_ENV=staging
+
+  # ============== PROD (ej. rama main y/o hotfix/*) ==============
+  deploy-prod:
+    if: >
+      ${{
+        github.event.workflow_run.conclusion == 'success' &&
+        (
+          github.event.workflow_run.head_branch == 'main' ||
+          startsWith(github.event.workflow_run.head_branch, 'hotfix/')
+        )
+      }}
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
+    secrets: inherit
+    with:
+      environment: prod
+
+      azure_client_id:        ${{ vars.AZURE_CLIENT_ID }}
+      azure_tenant_id:        ${{ vars.AZURE_TENANT_ID }}
+      azure_subscription_id:  ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      resource_group:   ${{ vars.AZURE_RESOURCE_GROUP_PRD }}
+      aca_environment:  ${{ vars.ACA_ENVIRONMENT_PRD }}
+      location:         ${{ vars.AZURE_LOCATION }}
+
+      app_name:         ${{ vars.ACA_APP_NAME_PRD }}
+      image_ref:        ${{ vars.ACR_LOGIN_SERVER }}/${{ vars.IMAGE_NAME }}:${{ github.event.workflow_run.head_sha }}
+
+      ingress:          ${{ vars.ACA_INGRESS_PRD || 'external' }}
+      target_port:      ${{ vars.ACA_TARGET_PORT || '3000' }}
+      cpu:              ${{ vars.ACA_CPU_PRD || '2' }}
+      memory:           ${{ vars.ACA_MEMORY_PRD || '4Gi' }}
+      min_replicas:     ${{ vars.ACA_MIN_REPLICAS_PRD || '2' }}
+      max_replicas:     ${{ vars.ACA_MAX_REPLICAS_PRD || '6' }}
+
+      acr_login_server:        ${{ vars.ACR_LOGIN_SERVER }}
+      acr_identity_client_id:  ${{ vars.ACR_IDENTITY_CLIENT_ID }}
+
       extra_env: |
         NODE_ENV=production
-        FEATURE_FLAG_X=true
