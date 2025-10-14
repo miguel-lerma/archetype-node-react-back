@@ -1,201 +1,85 @@
 ---
-name: Reusable - Deploy to Azure Container Apps
+# .github/workflows/cd.yml (caller en el repo del proyecto)
+name: CD → ACA (dev)
 
 on:
-  workflow_call:
-    inputs:
-      environment:
-        description: "GitHub Environment a aplicar (dev, staging, prod, etc.)"
-        type: string
-        required: false
+  push:
+    branches: [develop]
+  workflow_dispatch:
 
-      # ---- OIDC / Azure ----
-      azure_client_id:
-        type: string
-        required: true
-      azure_tenant_id:
-        type: string
-        required: true
-      azure_subscription_id:
-        type: string
-        required: true
-
-      # ---- Destino ----
-      resource_group:
-        type: string
-        required: true
-      aca_environment:
-        type: string
-        required: true
-      location:
-        type: string
-        required: true  # ya no se usa para crear; lo mantengo por compatibilidad
-
-      # ---- App e imagen ----
-      app_name:
-        type: string
-        required: true
-      image_ref:
-        type: string
-        required: true
-
-      # ---- Ingress/puerto (NO se tocan en update) ----
-      ingress:
-        type: string
-        required: true
-      target_port:
-        type: string
-        required: true
-
-      # ---- Escala/recursos (NO se tocan en update) ----
-      cpu:
-        type: string
-        required: true
-      memory:
-        type: string
-        required: true
-      min_replicas:
-        type: string
-        required: true
-      max_replicas:
-        type: string
-        required: true
-
-      # ---- Opcionales ----
-      extra_env:
-        description: "Variables de entorno línea por línea (KEY=VALUE)"
-        type: string
-        required: false
-      acr_login_server:
-        description: "login server del ACR (opcional; **no** se cambia el registry)"
-        type: string
-        required: false
-      acr_identity_client_id:
-        description: "Client ID de identidad con AcrPull (opcional; **no** se usa aquí)"
-        type: string
-        required: false
-
-    secrets: {}
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
-  deploy:
-    environment: ${{ inputs.environment || '' }}
+  build_and_push:
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: read
-
+    outputs:
+      image_repo: ${{ steps.meta.outputs.images }}         # p.ej. itxzacrlab01.azurecr.io/archetype-node-react-back
+      image_tag:  ${{ steps.meta.outputs.version }}        # p.ej. develop
+      digest:     ${{ steps.build.outputs.digest }}        # sha256:...
     steps:
-      - name: Checkout repo (pipelines)
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      # --- Lints opcionales ---
-      - name: Write .yamllint config
-        run: |
-          cat > .yamllint.yml <<'CFG'
-          extends: default
-          rules:
-            document-start:
-              present: true
-            line-length:
-              max: 160
-            trailing-spaces:
-              level: error
-            new-line-at-end-of-file:
-              level: error
-            truthy: disable
-            brackets: disable
-            comments: disable
-            indentation: disable
-          CFG
-
-      - name: yamllint (YAML format)
-        uses: ibiqlik/action-yamllint@v3
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
         with:
-          file_or_dir: .github/workflows
-          format: github
-          strict: true
-          no_warnings: false
+          images: itxzacrlab01.azurecr.io/archetype-node-react-back
+          tags: |
+            type=ref,event=branch
+            type=sha,format=short,prefix=sha-
 
-      - name: actionlint (GHA syntax)
-        uses: rhysd/actionlint@v1.6.27
-
-      # --- Login Azure con OIDC ---
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
-          client-id: ${{ inputs.azure_client_id }}
-          tenant-id: ${{ inputs.azure_tenant_id }}
-          subscription-id: ${{ inputs.azure_subscription_id }}
+          client-id:       ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # --- VALIDACIÓN: no crear nada, solo comprobar que existe ---
-      - name: Validar infraestructura existente (RG / ACA env / App)
-        shell: bash
-        run: |
-          set -euo pipefail
+      - name: ACR login
+        run: az acr login --name itxzacrlab01
 
-          RG="${{ inputs.resource_group }}"
-          ACA_ENV="${{ inputs.aca_environment }}"
-          APP="${{ inputs.app_name }}"
+      - name: Build & Push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
 
-          echo "Validando Resource Group '${RG}'…"
-          if ! az group show -n "$RG" >/dev/null 2>&1; then
-            echo "❌ El Resource Group '$RG' NO existe. Este workflow no crea infra." >&2
-            exit 1
-          fi
+  deploy:
+    needs: build_and_push
+    uses: owner/tu-repo-pipelines/.github/workflows/deploy-aca.yml@main
+    with:
+      environment: dev
 
-          echo "Validando ACA Environment '${ACA_ENV}' en RG '${RG}'…"
-          if ! az containerapp env show -g "$RG" -n "$ACA_ENV" >/dev/null 2>&1; then
-            echo "❌ El ACA Environment '$ACA_ENV' NO existe en RG '$RG'. Este workflow no crea infra." >&2
-            exit 1
-          fi
+      azure_client_id:       ${{ vars.AZURE_CLIENT_ID }}
+      azure_tenant_id:       ${{ vars.AZURE_TENANT_ID }}
+      azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-          echo "Validando Container App '${APP}' en RG '${RG}'…"
-          if ! az containerapp show -g "$RG" -n "$APP" >/dev/null 2>&1; then
-            echo "❌ La Container App '$APP' NO existe en RG '$RG'. Este workflow no crea apps." >&2
-            exit 1
-          fi
+      resource_group:  rg-dev
+      aca_environment: acaenv-dev
 
-          echo "✅ Validación OK. Continuando con actualización de imagen/env vars…"
+      app_name: archetype-node-react-back
 
-      - name: Build env var block
-        id: envblk
-        shell: bash
-        run: |
-          set -euo pipefail
-          PARAMS=()
-          if [[ -n "${{ inputs.extra_env }}" ]]; then
-            while IFS= read -r line; do
-              [[ -z "$line" ]] && continue
-              key="${line%%=*}"
-              val="${line#*=}"
-              key="$(echo "$key" | xargs)"
-              val="$(echo "$val" | xargs)"
-              [[ -z "$key" ]] && continue
-              PARAMS+=( --env "$key=$val" )
-            done <<< "${{ inputs.extra_env }}"
-          fi
-          printf '%s\0' "${PARAMS[@]}" > envparams.bin
-          echo "file=envparams.bin" >> "$GITHUB_OUTPUT"
+      # Puedes pasar EITHER:
+      # 1) Inmutable (recomendado): repo@digest
+      image_ref: ${{ needs.build_and_push.outputs.image_repo }}@${{ needs.build_and_push.outputs.digest }}
 
-      # --- SOLO UPDATE: imagen + env vars. NADA de ingress/recursos/escala/registry ---
-      - name: Update Container App (solo imagen y env)
-        shell: bash
-        run: |
-          set -euo pipefail
+      # 2) O bien repo:tag + acr_login_server para que el reusable resuelva a digest:
+      # image_ref: itxzacrlab01.azurecr.io/archetype-node-react-back:develop
+      # acr_login_server: itxzacrlab01.azurecr.io
 
-          RG="${{ inputs.resource_group }}"
-          APP="${{ inputs.app_name }}"
-          IMAGE="${{ inputs.image_ref }}"
+      # Solo toca config si quieres cambiarla
+      # ingress: external
+      # target_port: "3000"
+      # cpu: "0.5"
+      # memory: "1Gi"
+      # min_replicas: "1"
+      # max_replicas: "3"
 
-          # Recupera los --env serializados
-          readarray -d '' ENV_PARAMS < "${{ steps.envblk.outputs.file }}"
-
-          echo "Actualizando imagen de '${APP}' a '${IMAGE}'…"
-          az containerapp update \
-            -g "$RG" \
-            -n "$APP" \
-            --image "$IMAGE" \
-            "${ENV_PARAMS[@]}"
-
-          echo "✅ Despliegue completado (sin cambios de infraestructura)."
+      extra_env: |
+        NODE_ENV=production
+        API_BASE_URL=https://api.dev.example.com
