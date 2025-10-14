@@ -3,27 +3,38 @@ name: Deploy to DEV
 
 on:
   push:
-    branches: ['develop']
+    branches: ["develop"]
   workflow_dispatch:
 
-# Necesario para que azure/login (en el reusable) pueda emitir el OIDC
+# Necesario para OIDC y para poder leer variables
 permissions:
   id-token: write
   contents: read
 
-# Evita despliegues simultáneos sobre la misma app
 concurrency:
-  group: deploy-be-dev
+  group: deploy-dev-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   deploy:
+    name: Deploy to DEV
+    # IMPORTANTE: esto habilita las variables del Environment "dev"
+    environment: dev
+
+    # Reusable workflow en el repo pipelines
     uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
+
+    # (opcional) puedes repetir permisos aquí si tu reusable no los define
+    permissions:
+      id-token: write
+      contents: read
+
     with:
+      # Selección del environment para el reusable (puede condicionar inputs internos)
       environment: dev
       commit_sha: ${{ github.sha }}
 
-      # Azure / OIDC
+      # Azure / OIDC (se leen de variables del Environment 'dev')
       azure_client_id: ${{ vars.AZURE_CLIENT_ID }}
       azure_tenant_id: ${{ vars.AZURE_TENANT_ID }}
       azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
@@ -38,10 +49,10 @@ jobs:
       acr_login_server: itxzacrlab01.azurecr.io
       acr_identity_client_id: ${{ vars.ACA_MI_CLIENT_ID }}
 
-      # Repo de imagen dentro del ACR (sin login server)
+      # Repo de la imagen dentro de ACR (sin el login server)
       image_repository: archetype-back
 
-      # Opcionales (se omiten si están vacíos)
+      # Opcionales (vacíos = no cambian lo existente)
       ingress: ""
       target_port: ""
       cpu: ""
