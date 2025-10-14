@@ -11,6 +11,11 @@ permissions:
   id-token: write
   contents: read
 
+# Evita despliegues simultáneos sobre la misma app
+concurrency:
+  group: deploy-be-dev
+  cancel-in-progress: true
+
 jobs:
   deploy:
     uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
