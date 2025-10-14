@@ -151,3 +151,4 @@ jobs:
       - id: make_ref
         name: Publicar image_ref (output)
         run: echo "image_ref=${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}" >> "$GITHUB_OUTPUT"
+
