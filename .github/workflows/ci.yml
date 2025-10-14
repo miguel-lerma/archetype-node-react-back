@@ -1,4 +1,3 @@
----
 name: CI - Build & Push Image
 
 on:
@@ -14,7 +13,7 @@ permissions:
 jobs:
   tests:
     name: Reusable: Build Node API
-    # llamando TU reusable (exactamente como lo compartiste, ya trae `on: workflow_call`)
+    # Llama a TU reusable build-node-api.yml (tal cual lo compartiste)
     uses: miguel-lerma/pipelines/.github/workflows/build-node-api.yml@main
     permissions:
       contents: read
@@ -31,14 +30,15 @@ jobs:
     needs: tests
     if: github.event_name == 'push'
 
-    # solo etiqueta visual del environment
-    environment:
-      name: ${{ github.ref_name == 'main' && 'prd' || github.ref_name == 'staging' && 'stg' || github.ref_name == 'develop' && 'dev' || 'dev' }}
+    # Etiqueta visible opcional (no afecta permisos/vars)
+    # Si esto volviera a molestar, simplemente bórralo.
+    # environment:
+    #   name: ${{ github.ref_name == 'main' && 'prd' || github.ref_name == 'staging' && 'stg' || github.ref_name == 'develop' && 'dev' || 'dev' }}
 
     env:
       ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
-      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID:   ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID:   ${{ vars.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
     steps:
@@ -48,16 +48,16 @@ jobs:
       - name: Preflight env check
         run: |
           [ -n "${ACR_LOGIN_SERVER}" ] || { echo "ACR_LOGIN_SERVER vacío"; exit 1; }
-          [ -n "${AZURE_CLIENT_ID}" ] || { echo "AZURE_CLIENT_ID vacío"; exit 1; }
-          [ -n "${AZURE_TENANT_ID}" ] || { echo "AZURE_TENANT_ID vacío"; exit 1; }
+          [ -n "${AZURE_CLIENT_ID}" ]   || { echo "AZURE_CLIENT_ID vacío"; exit 1; }
+          [ -n "${AZURE_TENANT_ID}" ]   || { echo "AZURE_TENANT_ID vacío"; exit 1; }
           [ -n "${AZURE_SUBSCRIPTION_ID}" ] || { echo "AZURE_SUBSCRIPTION_ID vacío"; exit 1; }
           echo "Environment OK"
 
       - name: Azure OIDC Login
         uses: azure/login@v2
         with:
-          client-id: ${{ env.AZURE_CLIENT_ID }}
-          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          client-id:       ${{ env.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
       - name: Derive ACR_NAME from server
