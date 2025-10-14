@@ -1,3 +1,4 @@
+---
 name: CD - Deploy to Azure Container Apps
 
 on:
@@ -13,6 +14,7 @@ jobs:
   deploy-dev:
     name: Deploy to DEV
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'develop' }}
+    environment: dev
     uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
     permissions:
       id-token: write
@@ -43,6 +45,7 @@ jobs:
   deploy-qa:
     name: Deploy to QA
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'staging' }}
+    environment: qa
     uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
     permissions:
       id-token: write
@@ -70,9 +73,10 @@ jobs:
       acr_login_server:       ${{ vars.ACR_LOGIN_SERVER }}
       acr_identity_client_id: ${{ vars.AZURE_CLIENT_ID }}
 
-  deploy-prod:
+  deploy-prd:
     name: Deploy to PROD
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
+    environment: prd
     uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
     permissions:
       id-token: write
