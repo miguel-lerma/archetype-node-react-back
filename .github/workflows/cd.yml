@@ -94,4 +94,3 @@ jobs:
         HTTP_CONCURRENCY=${{ vars.HTTP_CONCURRENCY }}
       acr_login_server: ${{ vars.ACR_LOGIN_SERVER }}
       acr_identity_client_id: ${{ vars.AZURE_CLIENT_ID }}
-
