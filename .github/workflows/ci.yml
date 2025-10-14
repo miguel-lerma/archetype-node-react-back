@@ -29,15 +29,29 @@ jobs:
     needs: tests
     if: github.event_name == 'push'
 
+    # MUY IMPORTANTE: ligar el job al Environment correcto
+    environment:
+      name: ${{ github.ref_name == 'main' && 'production'
+              || github.ref_name == 'staging' && 'staging'
+              || github.ref_name == 'develop' && 'dev'
+              || 'dev' }}
+
+    # Estas vars se leen desde el Environment ligado arriba
     env:
-      ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
-      AZURE_CLIENT_ID:   ${{ vars.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID:   ${{ vars.AZURE_TENANT_ID }}
-      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ACR_LOGIN_SERVER:       ${{ vars.ACR_LOGIN_SERVER }}
+      AZURE_CLIENT_ID:        ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID:        ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID:  ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Debug env selection (no imprime secretos)
+        run: |
+          echo "Branch: $GITHUB_REF_NAME"
+          echo "Environment ligado: ${{ job.environment.name }}"
+          echo "ACR_LOGIN_SERVER (expect non-empty): '${ACR_LOGIN_SERVER}'"
 
       - name: Preflight env check
         run: |
