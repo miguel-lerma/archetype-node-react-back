@@ -12,7 +12,6 @@ permissions:
 
 jobs:
   tests:
-    # Llama al reusable del repo pipelines
     uses: miguel-lerma/pipelines/.github/workflows/build-node-api.yml@main
     with:
       app_dir: "."
@@ -29,7 +28,7 @@ jobs:
     needs: tests
     if: github.event_name == 'push'
 
-    # Solo para visibilidad en la UI de Actions
+    # Solo para visibilidad en la UI
     environment:
       name: ${{ github.ref_name == 'main' && 'prd' || github.ref_name == 'staging' && 'stg' || github.ref_name == 'develop' && 'dev' || 'dev' }}
 
