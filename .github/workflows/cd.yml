@@ -1,47 +1,42 @@
----
-name: CD - Deploy to Azure Container Apps
+name: Deploy to DEV
 
 on:
-  workflow_run:
-    workflows: ["CI - Build & Push Image"]
-    types: [completed]
-
-permissions:
-  contents: read
-  id-token: write
+  push:
+    branches: [ "develop" ]
+  workflow_dispatch:
 
 jobs:
-  deploy-dev:
-    name: Deploy to DEV
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'develop' }}
-    # IMPORTANTE: en jobs que llaman a reusables NO se usa 'runs-on' ni 'environment'
+  deploy:
     uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
-    permissions:
-      id-token: write
-      contents: read
     with:
       environment: dev
-      commit_sha: ${{ github.event.workflow_run.head_sha }}
+      commit_sha: ${{ github.sha }}
 
-  deploy-qa:
-    name: Deploy to QA
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'staging' }}
-    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
-    permissions:
-      id-token: write
-      contents: read
-    with:
-      environment: qa
-      commit_sha: ${{ github.event.workflow_run.head_sha }}
+      # Azure / OIDC
+      azure_client_id: ${{ vars.AZURE_CLIENT_ID }}        # o secrets si prefieres
+      azure_tenant_id: ${{ vars.AZURE_TENANT_ID }}
+      azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-  deploy-prd:
-    name: Deploy to PROD
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
-    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
-    permissions:
-      id-token: write
-      contents: read
-    with:
-      environment: prd
-      commit_sha: ${{ github.event.workflow_run.head_sha }}
+      # Destino
+      resource_group: ITX-RG-01
+      aca_environment: env-lab-aca
+      location: eastus
+      app_name: be-dev
 
+      # ACR + MI de la ACA para pulls
+      acr_login_server: itxzacrlab01.azurecr.io
+      acr_identity_client_id: ${{ vars.ACA_MI_CLIENT_ID }} # clientId de la MI asignada a la ACA 'be-dev'
+
+      # Repo de imagen dentro de ACR (sin el login server)
+      image_repository: archetype-back
+
+      # Opcionales
+      ingress: ""
+      target_port: ""
+      cpu: ""
+      memory: ""
+      min_replicas: ""
+      max_replicas: ""
+      extra_env: |
+        NODE_ENV=production
+        LOG_LEVEL=info
