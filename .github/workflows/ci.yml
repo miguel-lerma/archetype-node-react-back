@@ -1,3 +1,4 @@
+---
 name: CI - Build & Push Image
 
 on:
@@ -12,15 +13,17 @@ permissions:
 
 jobs:
   tests:
+    name: Reusable: Build Node API
+    # llamando TU reusable (exactamente como lo compartiste, ya trae `on: workflow_call`)
     uses: miguel-lerma/pipelines/.github/workflows/build-node-api.yml@main
+    permissions:
+      contents: read
     with:
       app_dir: "."
       node_version: "20.x"
       run_lint: true
       run_test: true
       run_build: false
-    permissions:
-      contents: read
 
   publish-image:
     name: Build & Push Docker image to ACR (OIDC)
@@ -28,7 +31,7 @@ jobs:
     needs: tests
     if: github.event_name == 'push'
 
-    # Solo para visibilidad en la UI
+    # solo etiqueta visual del environment
     environment:
       name: ${{ github.ref_name == 'main' && 'prd' || github.ref_name == 'staging' && 'stg' || github.ref_name == 'develop' && 'dev' || 'dev' }}
 
@@ -43,7 +46,6 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Preflight env check
-        shell: bash
         run: |
           [ -n "${ACR_LOGIN_SERVER}" ] || { echo "ACR_LOGIN_SERVER vacío"; exit 1; }
           [ -n "${AZURE_CLIENT_ID}" ] || { echo "AZURE_CLIENT_ID vacío"; exit 1; }
@@ -59,13 +61,10 @@ jobs:
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
       - name: Derive ACR_NAME from server
-        shell: bash
-        run: |
-          echo "ACR_NAME=${ACR_LOGIN_SERVER%%.azurecr.io}" >> "$GITHUB_ENV"
+        run: echo "ACR_NAME=${ACR_LOGIN_SERVER%%.azurecr.io}" >> "$GITHUB_ENV"
 
       - name: Azure CLI - Login to ACR
-        run: |
-          az acr login --name "$ACR_NAME"
+        run: az acr login --name "$ACR_NAME"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -93,7 +92,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
 
       - name: Summary
-        shell: bash
         run: |
           {
             echo "## Image pushed"
