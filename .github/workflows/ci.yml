@@ -29,15 +29,15 @@ jobs:
     needs: tests
     if: github.event_name == 'push'
 
-    # ÚNICO CAMBIO: usar 'dev' cuando la rama es develop
+    # Mapear a tu naming de environments (opcional, solo para visibilidad)
     environment:
-      name: ${{ github.ref_name == 'main' && 'prd' || github.ref_name == 'staging' && 'stg' || github.ref_name == 'develop' && 'dev' || 'develop' }}
+      name: ${{ github.ref_name == 'main' && 'prd' || github.ref_name == 'staging' && 'stg' || github.ref_name == 'develop' && 'dev' || 'dev' }}
 
     env:
-      ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER || secrets.ACR_LOGIN_SERVER }}
-      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
-      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+      ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
     steps:
       - name: Checkout
@@ -78,10 +78,13 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.ACR_LOGIN_SERVER }}/${{ github.event.repository.name }}
+          images: ${{ env.ACR_LOGIN_SERVER }}/${{ vars.IMAGE_NAME || github.event.repository.name }}
           tags: |
+            # rama (develop, staging, main)
             type=ref,event=branch
-            type=sha
+            # SHA LARGO y con prefijo claro => sha-<40>
+            type=sha,format=long,prefix=sha-
+            # latest solo en main
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/heads/main') }}
 
       - name: Build & Push
@@ -99,7 +102,7 @@ jobs:
           {
             echo "## Image pushed"
             echo "- Registry: \`${{ env.ACR_LOGIN_SERVER }}\`"
-            echo "- Image: \`${{ env.ACR_LOGIN_SERVER }}/${{ github.event.repository.name }}\`"
+            echo "- Image: \`${{ env.ACR_LOGIN_SERVER }}/${{ vars.IMAGE_NAME || github.event.repository.name }}\`"
             echo "- Tags:"
             echo '${{ steps.meta.outputs.tags }}' | tr ' ' '\n'
           } >> "$GITHUB_STEP_SUMMARY"
