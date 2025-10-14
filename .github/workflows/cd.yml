@@ -10,56 +10,43 @@ permissions:
   contents: read
   id-token: write
 
-# Evita superposiciones si se empujan varios commits a la misma rama
-concurrency:
-  group: cd-${{ github.event.workflow_run.head_branch }}
-  cancel-in-progress: true
-
 jobs:
-  # ================= DEV =================
   deploy-dev:
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'develop' }}
     name: Deploy DEV
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'develop' }}
+    # LIGA ESTE JOB AL ENV dev PARA QUE RESUELVA vars.* DEL ENVIRONMENT DEV
+    environment: dev
     uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
     with:
-      # ← OJO: esto es un INPUT del workflow reusable, no el job-level environment
+      # INPUTS QUE ESPERA EL REUSABLE
       environment: dev
-
-      # Credenciales OIDC (vars globales del repo)
       azure_client_id: ${{ vars.AZURE_CLIENT_ID }}
       azure_tenant_id: ${{ vars.AZURE_TENANT_ID }}
       azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      # Destino
       resource_group: ${{ vars.AZ_RESOURCE_GROUP }}
       aca_environment: ${{ vars.ACA_ENV_NAME }}
       location: ${{ vars.AZ_LOCATION }}
-
-      # App + imagen (del push del CI)
       app_name: ${{ vars.APP_NAME }}
       image_ref: ${{ vars.ACR_LOGIN_SERVER }}/${{ vars.IMAGE_NAME || github.event.repository.name }}:sha-${{ github.event.workflow_run.head_sha }}
-
-      # Config de contenedor
-      ingress: ${{ vars.INGRESS || 'external' }}
-      target_port: ${{ vars.TARGET_PORT || '3000' }}
-      cpu: ${{ vars.CPU || '0.5' }}
-      memory: ${{ vars.MEMORY || '1Gi' }}
-      min_replicas: ${{ vars.MIN_REPLICAS || '1' }}
-      max_replicas: ${{ vars.MAX_REPLICAS || '3' }}
-
-      # Env extras
+      ingress: ${{ vars.INGRESS }}
+      target_port: ${{ vars.TARGET_PORT }}
+      cpu: ${{ vars.CPU }}
+      memory: ${{ vars.MEMORY }}
+      min_replicas: ${{ vars.MIN_REPLICAS }}
+      max_replicas: ${{ vars.MAX_REPLICAS }}
       extra_env: |
         NODE_ENV=development
         APP_ENV=develop
         HTTP_CONCURRENCY=${{ vars.HTTP_CONCURRENCY }}
-
-      # Registry (opcional)
       acr_login_server: ${{ vars.ACR_LOGIN_SERVER }}
+      # si tu ACR usa identidad asignada, pasa el clientId de esa identidad;
+      # si no, déjalo vacío y el reusable ignorará ese paso
+      acr_identity_client_id: ${{ vars.AZURE_CLIENT_ID }}
 
-  # =============== STAGING ===============
   deploy-staging:
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'staging' }}
     name: Deploy STAGING
+    if: ${{ github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.head_branch, 'release/') }}
+    environment: staging
     uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
     with:
       environment: stg
@@ -71,22 +58,23 @@ jobs:
       location: ${{ vars.AZ_LOCATION }}
       app_name: ${{ vars.APP_NAME }}
       image_ref: ${{ vars.ACR_LOGIN_SERVER }}/${{ vars.IMAGE_NAME || github.event.repository.name }}:sha-${{ github.event.workflow_run.head_sha }}
-      ingress: ${{ vars.INGRESS || 'external' }}
-      target_port: ${{ vars.TARGET_PORT || '3000' }}
-      cpu: ${{ vars.CPU || '0.5' }}
-      memory: ${{ vars.MEMORY || '1Gi' }}
-      min_replicas: ${{ vars.MIN_REPLICAS || '1' }}
-      max_replicas: ${{ vars.MAX_REPLICAS || '3' }}
+      ingress: ${{ vars.INGRESS }}
+      target_port: ${{ vars.TARGET_PORT }}
+      cpu: ${{ vars.CPU }}
+      memory: ${{ vars.MEMORY }}
+      min_replicas: ${{ vars.MIN_REPLICAS }}
+      max_replicas: ${{ vars.MAX_REPLICAS }}
       extra_env: |
         NODE_ENV=staging
         APP_ENV=staging
         HTTP_CONCURRENCY=${{ vars.HTTP_CONCURRENCY }}
       acr_login_server: ${{ vars.ACR_LOGIN_SERVER }}
+      acr_identity_client_id: ${{ vars.AZURE_CLIENT_ID }}
 
-  # ================ PROD =================
   deploy-prod:
-    if: ${{ github.event.workflow_run.conclusion == 'success' && (github.event.workflow_run.head_branch == 'main' || startsWith(github.event.workflow_run.head_branch, 'hotfix/')) }}
     name: Deploy PROD
+    if: ${{ github.event.workflow_run.conclusion == 'success' && (github.event.workflow_run.head_branch == 'main' || startsWith(github.event.workflow_run.head_branch, 'hotfix/')) }}
+    environment: production
     uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
     with:
       environment: prd
@@ -98,14 +86,15 @@ jobs:
       location: ${{ vars.AZ_LOCATION }}
       app_name: ${{ vars.APP_NAME }}
       image_ref: ${{ vars.ACR_LOGIN_SERVER }}/${{ vars.IMAGE_NAME || github.event.repository.name }}:sha-${{ github.event.workflow_run.head_sha }}
-      ingress: ${{ vars.INGRESS || 'external' }}
-      target_port: ${{ vars.TARGET_PORT || '3000' }}
-      cpu: ${{ vars.CPU || '0.5' }}
-      memory: ${{ vars.MEMORY || '1Gi' }}
-      min_replicas: ${{ vars.MIN_REPLICAS || '1' }}
-      max_replicas: ${{ vars.MAX_REPLICAS || '3' }}
+      ingress: ${{ vars.INGRESS }}
+      target_port: ${{ vars.TARGET_PORT }}
+      cpu: ${{ vars.CPU }}
+      memory: ${{ vars.MEMORY }}
+      min_replicas: ${{ vars.MIN_REPLICAS }}
+      max_replicas: ${{ vars.MAX_REPLICAS }}
       extra_env: |
         NODE_ENV=production
         APP_ENV=production
         HTTP_CONCURRENCY=${{ vars.HTTP_CONCURRENCY }}
       acr_login_server: ${{ vars.ACR_LOGIN_SERVER }}
+      acr_identity_client_id: ${{ vars.AZURE_CLIENT_ID }}
