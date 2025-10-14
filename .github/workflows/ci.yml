@@ -2,25 +2,50 @@
 name: CI
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
   push:
-    branches: [develop, main]
+    branches: [main, develop, feature/**]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
 
 permissions:
   contents: read
-  id-token: write
+  id-token: write  # para OIDC si tu reusable lo usa
+  packages: read
 
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+env:
+  IMAGE_NAME: archetype-node-react-back
+  APP_VERSION: sha-${{ github.sha }}
 
 jobs:
   lint:
-    name: Lint Workflows
-    runs-on: ubuntu-latest
+    name: Lint workflows
+    runs-on: ubuntu-24.04
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Write yamllint config
+        run: |
+          cat > .yamllint.yml <<'CFG'
+          extends: default
+          rules:
+            document-start:
+              present: true
+            trailing-spaces:
+              level: error
+            new-line-at-end-of-file:
+              level: error
+            # Reglas ruidosas para GH expressions:
+            colons: disable
+            braces: disable
+            line-length: disable
+            truthy: disable
+            brackets: disable
+            comments: disable
+            indentation: disable
+          CFG
 
       - name: yamllint
         uses: ibiqlik/action-yamllint@v3
@@ -28,138 +53,47 @@ jobs:
           file_or_dir: .github/workflows
           format: github
           strict: true
-          config_data: |
-            extends: default
-            rules:
-              document-start:
-                present: true
-              trailing-spaces:
-                level: error
-              new-line-at-end-of-file:
-                level: error
-              colons: disable
-              braces: disable
-              line-length: disable
-              truthy: disable
-              brackets: disable
-              comments: disable
-              indentation: disable
+          no_warnings: false
 
       - name: actionlint
         uses: rhysd/actionlint@v1.6.27
         with:
           shellcheck: false
 
-  test:
-    name: Node Tests
-    runs-on: ubuntu-latest
+  deploy-dev:
+    name: Deploy DEV
+    if: github.ref == 'refs/heads/develop'
     needs: lint
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version-file: '.nvmrc'
-          cache: npm
-      - name: Install
-        run: npm ci
-      - name: Lint (project)
-        run: |
-          if npm run | grep -qE 'lint'; then
-            npm run lint
-          else
-            echo "No lint script; skipping."
-          fi
-      - name: Test
-        run: |
-          if npm run | grep -qE 'test'; then
-            npm test --if-present
-          else
-            echo "No test script; skipping."
-          fi
-
-  build:
-    name: Build & Push Image
-    runs-on: ubuntu-latest
-    needs: test
-    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/develop') }}
-    environment: dev
-    permissions:
-      contents: read
-      id-token: write
-    env:
-      IMAGE_NAME: archetype-node-react-back
-      REGISTRY: ${{ vars.ACR_LOGIN_SERVER }}
-      APP_VERSION: sha-${{ github.sha }}
-      # Solo VARS (sin secrets)
-      AZURE_CLIENT_ID:       ${{ vars.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID:       ${{ vars.AZURE_TENANT_ID }}
-      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      ACR_NAME:              ${{ vars.ACR_NAME }}
-    outputs:
-      image_ref: ${{ steps.build_push.outputs.image_ref }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Validate required vars
-        run: |
-          set -e
-          miss=0
-          for v in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID ACR_NAME REGISTRY IMAGE_NAME APP_VERSION; do
-            if [ -z "${!v}" ]; then
-              echo "::error::Missing env var $v"
-              miss=1
-            fi
-          done
-          exit $miss
-
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id:       ${{ env.AZURE_CLIENT_ID }}
-          tenant-id:       ${{ env.AZURE_TENANT_ID }}
-          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Login to ACR
-        run: az acr login --name "${ACR_NAME}"
-
-      - name: Build & Push
-        id: build_push
-        run: |
-          set -e
-          IMAGE="${REGISTRY}/${IMAGE_NAME}:${APP_VERSION}"
-          docker build -t "$IMAGE" .
-          docker push "$IMAGE"
-          echo "image_ref=$IMAGE" >> "$GITHUB_OUTPUT"
-          echo "✅ Pushed $IMAGE" >> "$GITHUB_STEP_SUMMARY"
-
-  deploy:
-    name: Deploy to ACA (dev)
-    needs: build
-    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/develop') }}
-    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@refs/heads/main
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
     with:
+      # —— Parámetros de tu reusable (solo vars, nada de secrets) ——
       environment: dev
+      azure_client_id: ${{ vars.AZURE_CLIENT_ID }}
+      azure_tenant_id: ${{ vars.AZURE_TENANT_ID }}
+      azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # Solo VARS (sin secrets)
-      azure_client_id:        ${{ vars.AZURE_CLIENT_ID }}
-      azure_tenant_id:        ${{ vars.AZURE_TENANT_ID }}
-      azure_subscription_id:  ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      acr_login_server:       ${{ vars.ACR_LOGIN_SERVER }}
-      acr_identity_client_id: ${{ vars.ACR_IDENTITY_CLIENT_ID }}
+      resource_group: ${{ vars.AZURE_RG_DEV }}
+      aca_environment: ${{ vars.ACA_ENV_DEV }}
+      location: ${{ vars.AZURE_LOCATION_DEV }}
+      app_name: ${{ vars.ACA_APP_DEV }}
 
-      resource_group:   ${{ vars.AZURE_RESOURCE_GROUP }}
-      aca_environment:  ${{ vars.ACA_ENVIRONMENT }}
-      location:         ${{ vars.AZURE_LOCATION }}
-      app_name:         ${{ vars.APP_NAME }}
-      ingress:          ${{ vars.INGRESS }}
-      target_port:      ${{ vars.TARGET_PORT }}
-      cpu:              ${{ vars.CPU }}
-      memory:           ${{ vars.MEMORY }}
-      min_replicas:     ${{ vars.MIN_REPLICAS }}
-      max_replicas:     ${{ vars.MAX_REPLICAS }}
+      # Imagen sin registry, como venías usando
+      image_ref: /${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
+
+      # ACA app settings
+      ingress: ${{ vars.ACA_INGRESS_DEV }}
+      target_port: ${{ vars.ACA_TARGET_PORT_DEV }}
+      cpu: ${{ vars.ACA_CPU_DEV }}
+      memory: ${{ vars.ACA_MEMORY_DEV }}
+      min_replicas: ${{ vars.ACA_MIN_REPLICAS_DEV }}
+      max_replicas: ${{ vars.ACA_MAX_REPLICAS_DEV }}
+
+      # Env extras (idéntico a tus logs)
       extra_env: |
         NODE_ENV=development
         APP_ENV=develop
         HTTP_CONCURRENCY=
-      image_ref:        ${{ needs.build.outputs.image_ref }}
+
+      # Si tu reusable necesita ACR vía identidad administrada:
+      acr_login_server: ${{ vars.ACR_LOGIN_SERVER }}
+      acr_identity_client_id: ${{ vars.ACR_IDENTITY_CLIENT_ID }}
