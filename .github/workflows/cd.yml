@@ -1,85 +1,57 @@
 ---
-# .github/workflows/cd.yml (caller en el repo del proyecto)
-name: CD → ACA (dev)
+name: CD - Deploy to Azure Container Apps
 
 on:
   push:
-    branches: [develop]
-  workflow_dispatch:
+    branches:
+      - main        # ← ajusta si usas otra rama (e.g. develop)
+  workflow_dispatch: {}
 
+# Permisos en el caller (recomendado al usar OIDC + reusable)
 permissions:
   id-token: write
   contents: read
 
 jobs:
-  build_and_push:
-    runs-on: ubuntu-latest
-    outputs:
-      image_repo: ${{ steps.meta.outputs.images }}         # p.ej. itxzacrlab01.azurecr.io/archetype-node-react-back
-      image_tag:  ${{ steps.meta.outputs.version }}        # p.ej. develop
-      digest:     ${{ steps.build.outputs.digest }}        # sha256:...
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Docker meta
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: itxzacrlab01.azurecr.io/archetype-node-react-back
-          tags: |
-            type=ref,event=branch
-            type=sha,format=short,prefix=sha-
-
-      - name: Azure Login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id:       ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id:       ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      - name: ACR login
-        run: az acr login --name itxzacrlab01
-
-      - name: Build & Push
-        id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-
   deploy:
-    needs: build_and_push
-    uses: owner/tu-repo-pipelines/.github/workflows/deploy-aca.yml@main
+    name: Deploy to ACA (reusable)
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
+    # Si tu reusable necesitara secretos del caller, esto los pasa.
+    secrets: inherit
     with:
+      # --- Contexto / Environment (opcional) ---
       environment: dev
 
-      azure_client_id:       ${{ vars.AZURE_CLIENT_ID }}
-      azure_tenant_id:       ${{ vars.AZURE_TENANT_ID }}
+      # --- OIDC / Azure ---
+      azure_client_id: ${{ vars.AZURE_CLIENT_ID }}
+      azure_tenant_id: ${{ vars.AZURE_TENANT_ID }}
       azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      resource_group:  rg-dev
-      aca_environment: acaenv-dev
+      # --- Destino ---
+      resource_group: ${{ vars.AZURE_RESOURCE_GROUP }}
+      aca_environment: ${{ vars.ACA_ENVIRONMENT }}
+      location: ${{ vars.AZURE_LOCATION }}
 
-      app_name: archetype-node-react-back
+      # --- App e imagen ---
+      app_name: ${{ vars.ACA_APP_NAME }}
+      # Tag inmutable por commit para despliegues repetibles
+      image_ref: ${{ vars.ACR_LOGIN_SERVER }}/${{ vars.IMAGE_NAME || 'archetype-node-react-back' }}:${{ github.sha }}
 
-      # Puedes pasar EITHER:
-      # 1) Inmutable (recomendado): repo@digest
-      image_ref: ${{ needs.build_and_push.outputs.image_repo }}@${{ needs.build_and_push.outputs.digest }}
+      # --- Ingress/puerto ---
+      ingress: external
+      target_port: "3000"
 
-      # 2) O bien repo:tag + acr_login_server para que el reusable resuelva a digest:
-      # image_ref: itxzacrlab01.azurecr.io/archetype-node-react-back:develop
-      # acr_login_server: itxzacrlab01.azurecr.io
+      # --- Escala/recursos ---
+      cpu: "0.5"
+      memory: "1Gi"
+      min_replicas: "1"
+      max_replicas: "3"
 
-      # Solo toca config si quieres cambiarla
-      # ingress: external
-      # target_port: "3000"
-      # cpu: "0.5"
-      # memory: "1Gi"
-      # min_replicas: "1"
-      # max_replicas: "3"
+      # --- Registry (opcional, si tu ACA no lo tiene seteado) ---
+      acr_login_server: ${{ vars.ACR_LOGIN_SERVER }}
+      acr_identity_client_id: ${{ vars.ACR_IDENTITY_CLIENT_ID }}
 
+      # --- Variables extra (opcional) ---
       extra_env: |
         NODE_ENV=production
-        API_BASE_URL=https://api.dev.example.com
+        FEATURE_FLAG_X=true
