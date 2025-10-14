@@ -1,3 +1,4 @@
+---
 name: CI
 
 on:
@@ -8,8 +9,6 @@ on:
     branches:
       - '**'
 
-# Puedes seguir usando env a nivel workflow para tus steps,
-# solo recuerda NO usar env.* dentro de "with:" de un reusable.
 env:
   IMAGE_NAME: archetype-node-react-back
 
@@ -52,13 +51,10 @@ jobs:
 
       - name: actionlint
         uses: rhysd/actionlint@v1.6.27
-        # Nota: esta acción no necesita inputs; la dejamos tal cual
-        # para que siga como en tu base.
 
   build-and-push:
     name: Build & Push
     runs-on: ubuntu-latest
-    # Mantengo tu lógica de versionado con el SHA
     env:
       APP_VERSION: sha-${{ github.sha }}
       REGISTRY: ${{ vars.ACR_LOGIN_SERVER }}
@@ -66,8 +62,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Si tienes credenciales vía variables (NO secretos), iniciamos sesión en Azure.
-      # Si no existen las vars, el paso se salta y no rompe.
       - name: Azure Login (opcional por vars)
         if: ${{ vars.AZURE_CLIENT_ID && vars.AZURE_TENANT_ID && vars.AZURE_SUBSCRIPTION_ID }}
         uses: azure/login@v2
@@ -77,17 +71,10 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      # Aquí mantén tus pasos reales de build & push como ya los tenías.
-      # Ejemplos (descomenta si aplica a tu caso):
+      # Ejemplos de build/push (déjalos como ya los tengas en tu repo)
       # - name: Docker build
       #   run: |
       #     docker build -t ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} .
-      #
-      # - name: Docker login to ACR (managed identity)
-      #   if: ${{ env.REGISTRY && vars.ACR_IDENTITY_CLIENT_ID }}
-      #   run: |
-      #     az acr login --name ${{ env.REGISTRY }} --expose-token --output none
-      #
       # - name: Docker tag & push
       #   if: ${{ env.REGISTRY }}
       #   run: |
@@ -96,17 +83,14 @@ jobs:
 
   deploy-dev:
     name: Deploy DEV
-    # Este job reusa tu workflow remoto; dejamos la referencia como estaba funcionando
-    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@refs/heads/main
+    # FIX: quitar refs/heads/ y dejar sólo @main (o un tag/sha)
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
     with:
       environment: dev
 
-      # CORRECCIÓN CLAVE:
-      # NO usar env.IMAGE_NAME ni env.APP_VERSION aquí.
-      # Lo armamos directo con el nombre de la imagen y el SHA.
+      # No usamos env.* aquí; construir literal con github.sha
       image_ref: /archetype-node-react-back:sha-${{ github.sha }}
 
-      # Mantengo tus variables/inputs como en tus logs
       ingress: ''
       target_port: ''
       cpu: ''
@@ -118,7 +102,7 @@ jobs:
         APP_ENV=develop
         HTTP_CONCURRENCY=
 
-      # Solo variables (no secrets), como dijiste
+      # Solo repository variables, nada de secrets
       azure_client_id: ${{ vars.AZURE_CLIENT_ID }}
       azure_tenant_id: ${{ vars.AZURE_TENANT_ID }}
       azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
