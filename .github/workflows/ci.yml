@@ -50,6 +50,7 @@ jobs:
 
       - name: actionlint
         uses: rhysd/actionlint@v1.6.27
+        # (sin inputs extras para evitar el warning de "Unexpected input(s) 'shellcheck'")
 
   build-and-push:
     name: Build & Push
@@ -86,19 +87,23 @@ jobs:
       - name: Docker tag & push
         if: ${{ env.REGISTRY }}
         run: |
-          docker tag ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
+          docker tag  ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
 
   deploy-dev:
     name: Deploy DEV
-    # Solo desplegar a dev desde la rama develop para respetar la protección del environment
+    needs: [build-and-push]
     if: ${{ github.ref == 'refs/heads/develop' }}
+    # <<<<<<<<<< clave: atar el job al environment para que se hidraten los environment vars
+    environment: dev
     uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
+    # opcional pero recomendable si el reusable necesita GITHUB_TOKEN o algún secreto
+    secrets: inherit
     with:
       environment: dev
 
-      # Imagen que se empujó en el job anterior
-      image_ref: /archetype-node-react-back:sha-${{ github.sha }}
+      # Imagen que se empujó en el job anterior (ahora con registry)
+      image_ref: ${{ vars.ACR_LOGIN_SERVER }}/archetype-node-react-back:sha-${{ github.sha }}
 
       # Parámetros opcionales (vacíos por ahora, como los traías)
       ingress: ''
@@ -112,16 +117,16 @@ jobs:
       extra_env: |
         NODE_ENV=development
         APP_ENV=develop
-        HTTP_CONCURRENCY=
+        HTTP_CONCURRENCY=${{ vars.HTTP_CONCURRENCY }}
 
       # Solo repository/environment vars, nada de 'secrets'
       azure_client_id: ${{ vars.AZURE_CLIENT_ID }}
       azure_tenant_id: ${{ vars.AZURE_TENANT_ID }}
       azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      resource_group: ${{ vars.AZURE_RESOURCE_GROUP }}
-      aca_environment: ${{ vars.AZURE_ACA_ENVIRONMENT }}
-      location: ${{ vars.AZURE_LOCATION }}
-      app_name: ${{ vars.AZURE_ACA_APP_NAME }}
+      resource_group: ${{ vars.AZ_RESOURCE_GROUP }}
+      aca_environment: ${{ vars.ACA_ENV_NAME }}
+      location: ${{ vars.AZ_LOCATION }}
+      app_name: ${{ vars.APP_NAME }}
 
       acr_login_server: ${{ vars.ACR_LOGIN_SERVER }}
       acr_identity_client_id: ${{ vars.ACR_IDENTITY_CLIENT_ID }}
