@@ -113,3 +113,4 @@ jobs:
 
       acr_login_server: ${{ vars.ACR_LOGIN_SERVER }}
       acr_identity_client_id: ${{ vars.ACR_IDENTITY_CLIENT_ID }}
+
