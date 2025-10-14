@@ -44,3 +44,4 @@ jobs:
     with:
       environment: prd
       commit_sha: ${{ github.event.workflow_run.head_sha }}
+
