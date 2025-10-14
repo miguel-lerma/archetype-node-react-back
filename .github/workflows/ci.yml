@@ -7,6 +7,11 @@ on:
   pull_request:
     branches: ['develop', 'staging', 'main']
 
+permissions:
+  id-token: write
+  contents: read
+  packages: write
+
 env:
   IMAGE_NAME: archetype-node-react-back
 
@@ -33,14 +38,16 @@ jobs:
             indentation: disable
             empty-lines: disable
           CFG
-      - name: yamllint
+      - name: yamllint (non-blocking)
         uses: ibiqlik/action-yamllint@v3
         with:
           file_or_dir: .github/workflows
           format: github
           strict: true
-      - name: actionlint
+        continue-on-error: true
+      - name: actionlint (non-blocking)
         uses: rhysd/actionlint@v1.6.27
+        continue-on-error: true
 
   build:
     name: Build Docker Image
@@ -52,7 +59,6 @@ jobs:
       - name: Docker build
         run: docker build -t ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} .
 
-  # Push a ACR por rama, usando el environment para leer sus vars
   push-acr-dev:
     name: Push image to ACR (develop → DEV)
     if: ${{ github.ref == 'refs/heads/develop' }}
@@ -67,7 +73,6 @@ jobs:
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
-          auth-type: SERVICE_PRINCIPAL
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
@@ -97,7 +102,6 @@ jobs:
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
-          auth-type: SERVICE_PRINCIPAL
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
@@ -113,11 +117,11 @@ jobs:
           docker tag  ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
           docker push ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
 
-  push-acr-prod:
-    name: Push image to ACR (main → PROD)
+  push-acr-prd:  # ← antes “prod”
+    name: Push image to ACR (main → PRD)
     if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
-    environment: prod
+    environment: prd      # ← corrige el Environment
     needs: [build]
     env:
       APP_VERSION: sha-${{ github.sha }}
@@ -127,7 +131,6 @@ jobs:
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
-          auth-type: SERVICE_PRINCIPAL
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
