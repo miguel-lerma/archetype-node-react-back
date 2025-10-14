@@ -1,3 +1,4 @@
+---
 name: CI - Build & Push Image
 
 on:
@@ -51,9 +52,12 @@ jobs:
       - name: Docker build
         run: docker build -t ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} .
 
-  push-acr:
-    name: Push image to ACR
+  # Push a ACR por rama, usando el environment para leer sus vars
+  push-acr-dev:
+    name: Push image to ACR (develop → DEV)
+    if: ${{ github.ref == 'refs/heads/develop' }}
     runs-on: ubuntu-latest
+    environment: dev
     needs: [build]
     env:
       APP_VERSION: sha-${{ github.sha }}
@@ -67,26 +71,74 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Rebuild image
+      - name: Rebuild (asegurar tag)
         run: docker build -t ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} .
-
       - name: ACR login
         run: |
-          if [ -z "${REGISTRY}" ]; then
-            echo "❌ ACR_LOGIN_SERVER vacío"; exit 1
-          fi
+          if [ -z "${REGISTRY}" ]; then echo "ACR_LOGIN_SERVER vacío"; exit 1; fi
           ACR_NAME="${REGISTRY%%.azurecr.io}"
           az acr login --name "$ACR_NAME"
-
-      - name: Tag & Push image
+      - name: Tag & Push
         run: |
-          docker tag ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
+          docker tag  ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
           docker push ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
 
-      - name: Summary
+  push-acr-qa:
+    name: Push image to ACR (staging → QA)
+    if: ${{ github.ref == 'refs/heads/staging' }}
+    runs-on: ubuntu-latest
+    environment: qa
+    needs: [build]
+    env:
+      APP_VERSION: sha-${{ github.sha }}
+      REGISTRY: ${{ vars.ACR_LOGIN_SERVER }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          auth-type: SERVICE_PRINCIPAL
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Rebuild (asegurar tag)
+        run: docker build -t ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} .
+      - name: ACR login
         run: |
-          echo "## Imagen empujada al ACR" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Nombre: ${{ env.IMAGE_NAME }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Versión: ${{ env.APP_VERSION }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Registry: ${{ env.REGISTRY }}" >> "$GITHUB_STEP_SUMMARY"
+          if [ -z "${REGISTRY}" ]; then echo "ACR_LOGIN_SERVER vacío"; exit 1; fi
+          ACR_NAME="${REGISTRY%%.azurecr.io}"
+          az acr login --name "$ACR_NAME"
+      - name: Tag & Push
+        run: |
+          docker tag  ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
+          docker push ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
+
+  push-acr-prod:
+    name: Push image to ACR (main → PROD)
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    environment: prod
+    needs: [build]
+    env:
+      APP_VERSION: sha-${{ github.sha }}
+      REGISTRY: ${{ vars.ACR_LOGIN_SERVER }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          auth-type: SERVICE_PRINCIPAL
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Rebuild (asegurar tag)
+        run: docker build -t ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} .
+      - name: ACR login
+        run: |
+          if [ -z "${REGISTRY}" ]; then echo "ACR_LOGIN_SERVER vacío"; exit 1; fi
+          ACR_NAME="${REGISTRY%%.azurecr.io}"
+          az acr login --name "$ACR_NAME"
+      - name: Tag & Push
+        run: |
+          docker tag  ${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }} ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
+          docker push ${REGISTRY}/${{ env.IMAGE_NAME }}:${{ env.APP_VERSION }}
