@@ -94,7 +94,7 @@ jobs:
           if [ -z "${REGISTRY}" ]; then
             echo "ACR_LOGIN_SERVER vacío"; exit 1
           fi
-          # OJO: la expansión '%%' es de Bash, NO de ${{ }}.
+          # La expansión '%%' es de Bash, NO de ${{ }}.
           ACR_LOGIN_SERVER="${REGISTRY}"
           ACR_NAME="${ACR_LOGIN_SERVER%%.azurecr.io}"
           az acr login --name "$ACR_NAME"
@@ -113,8 +113,8 @@ jobs:
     with:
       environment: dev
 
-      # Imagen ya empujada al ACR
-      image_ref: ${{ vars.ACR_LOGIN_SERVER }}/archetype-node-react-back:sha-${{ github.sha }}
+      # Construir el valor con UNA sola expresión usando format()
+      image_ref: ${{ format('{0}/archetype-node-react-back:sha-{1}', vars.ACR_LOGIN_SERVER, github.sha) }}
 
       # Parámetros mapeados a tus vars
       ingress: ${{ vars.INGRESS }}
