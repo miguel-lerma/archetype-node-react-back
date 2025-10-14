@@ -1,3 +1,4 @@
+---
 name: CD - Deploy to ACA (auto by branch)
 
 on:
@@ -12,9 +13,7 @@ permissions:
 jobs:
   deploy-dev:
     name: Deploy DEV
-    # Solo cuando el CI del branch develop terminó OK
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'develop' }}
-    # Necesario para que vars.* apunten al Environment DEV de ESTE repo
     environment: dev
     uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
     with:

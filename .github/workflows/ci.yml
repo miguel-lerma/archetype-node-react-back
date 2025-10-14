@@ -1,97 +1,102 @@
-name: CD - Deploy to ACA (auto by branch)
+---
+name: CI - Build & Push Image
 
 on:
-  workflow_run:
-    workflows: ["CI - Build & Push Image"]
-    types: [completed]
+  pull_request:
+    branches: [develop, staging, main]
+  push:
+    branches: [develop, staging, main]
 
 permissions:
   contents: read
   id-token: write
 
 jobs:
-  deploy-dev:
-    name: Deploy DEV
-    # Solo cuando el CI del branch develop terminó OK
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'develop' }}
-    # Necesario para que vars.* apunten al Environment DEV de ESTE repo
-    environment: dev
-    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
+  tests:
+    name: Reusable: Build Node API
+    # llamando TU reusable (exactamente como lo compartiste, ya trae `on: workflow_call`)
+    uses: miguel-lerma/pipelines/.github/workflows/build-node-api.yml@main
+    permissions:
+      contents: read
     with:
-      environment: dev
-      azure_client_id: ${{ vars.AZURE_CLIENT_ID }}
-      azure_tenant_id: ${{ vars.AZURE_TENANT_ID }}
-      azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      resource_group: ${{ vars.AZ_RESOURCE_GROUP }}
-      aca_environment: ${{ vars.ACA_ENV_NAME }}
-      location: ${{ vars.AZ_LOCATION }}
-      app_name: ${{ vars.APP_NAME }}
-      image_ref: ${{ vars.ACR_LOGIN_SERVER }}/${{ vars.IMAGE_NAME || github.event.repository.name }}:sha-${{ github.event.workflow_run.head_sha }}
-      ingress: ${{ vars.INGRESS }}
-      target_port: ${{ vars.TARGET_PORT }}
-      cpu: ${{ vars.CPU }}
-      memory: ${{ vars.MEMORY }}
-      min_replicas: ${{ vars.MIN_REPLICAS }}
-      max_replicas: ${{ vars.MAX_REPLICAS }}
-      extra_env: |
-        NODE_ENV=development
-        APP_ENV=develop
-        HTTP_CONCURRENCY=${{ vars.HTTP_CONCURRENCY }}
-      acr_login_server: ${{ vars.ACR_LOGIN_SERVER }}
-      acr_identity_client_id: ${{ vars.AZURE_CLIENT_ID }}
+      app_dir: "."
+      node_version: "20.x"
+      run_lint: true
+      run_test: true
+      run_build: false
 
-  deploy-staging:
-    name: Deploy STAGING
-    if: ${{ github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.head_branch, 'release/') }}
-    environment: staging
-    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
-    with:
-      environment: stg
-      azure_client_id: ${{ vars.AZURE_CLIENT_ID }}
-      azure_tenant_id: ${{ vars.AZURE_TENANT_ID }}
-      azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      resource_group: ${{ vars.AZ_RESOURCE_GROUP }}
-      aca_environment: ${{ vars.ACA_ENV_NAME }}
-      location: ${{ vars.AZ_LOCATION }}
-      app_name: ${{ vars.APP_NAME }}
-      image_ref: ${{ vars.ACR_LOGIN_SERVER }}/${{ vars.IMAGE_NAME || github.event.repository.name }}:sha-${{ github.event.workflow_run.head_sha }}
-      ingress: ${{ vars.INGRESS }}
-      target_port: ${{ vars.TARGET_PORT }}
-      cpu: ${{ vars.CPU }}
-      memory: ${{ vars.MEMORY }}
-      min_replicas: ${{ vars.MIN_REPLICAS }}
-      max_replicas: ${{ vars.MAX_REPLICAS }}
-      extra_env: |
-        NODE_ENV=staging
-        APP_ENV=staging
-        HTTP_CONCURRENCY=${{ vars.HTTP_CONCURRENCY }}
-      acr_login_server: ${{ vars.ACR_LOGIN_SERVER }}
-      acr_identity_client_id: ${{ vars.AZURE_CLIENT_ID }}
+  publish-image:
+    name: Build & Push Docker image to ACR (OIDC)
+    runs-on: ubuntu-latest
+    needs: tests
+    if: github.event_name == 'push'
 
-  deploy-prod:
-    name: Deploy PROD
-    if: ${{ github.event.workflow_run.conclusion == 'success' && (github.event.workflow_run.head_branch == 'main' || startsWith(github.event.workflow_run.head_branch, 'hotfix/')) }}
-    environment: production
-    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
-    with:
-      environment: prd
-      azure_client_id: ${{ vars.AZURE_CLIENT_ID }}
-      azure_tenant_id: ${{ vars.AZURE_TENANT_ID }}
-      azure_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      resource_group: ${{ vars.AZ_RESOURCE_GROUP }}
-      aca_environment: ${{ vars.ACA_ENV_NAME }}
-      location: ${{ vars.AZ_LOCATION }}
-      app_name: ${{ vars.APP_NAME }}
-      image_ref: ${{ vars.ACR_LOGIN_SERVER }}/${{ vars.IMAGE_NAME || github.event.repository.name }}:sha-${{ github.event.workflow_run.head_sha }}
-      ingress: ${{ vars.INGRESS }}
-      target_port: ${{ vars.TARGET_PORT }}
-      cpu: ${{ vars.CPU }}
-      memory: ${{ vars.MEMORY }}
-      min_replicas: ${{ vars.MIN_REPLICAS }}
-      max_replicas: ${{ vars.MAX_REPLICAS }}
-      extra_env: |
-        NODE_ENV=production
-        APP_ENV=production
-        HTTP_CONCURRENCY=${{ vars.HTTP_CONCURRENCY }}
-      acr_login_server: ${{ vars.ACR_LOGIN_SERVER }}
-      acr_identity_client_id: ${{ vars.AZURE_CLIENT_ID }}
+    # solo etiqueta visual del environment
+    environment:
+      name: ${{ github.ref_name == 'main' && 'prd' || github.ref_name == 'staging' && 'stg' || github.ref_name == 'develop' && 'dev' || 'dev' }}
+
+    env:
+      ACR_LOGIN_SERVER: ${{ vars.ACR_LOGIN_SERVER }}
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Preflight env check
+        run: |
+          [ -n "${ACR_LOGIN_SERVER}" ] || { echo "ACR_LOGIN_SERVER vacío"; exit 1; }
+          [ -n "${AZURE_CLIENT_ID}" ] || { echo "AZURE_CLIENT_ID vacío"; exit 1; }
+          [ -n "${AZURE_TENANT_ID}" ] || { echo "AZURE_TENANT_ID vacío"; exit 1; }
+          [ -n "${AZURE_SUBSCRIPTION_ID}" ] || { echo "AZURE_SUBSCRIPTION_ID vacío"; exit 1; }
+          echo "Environment OK"
+
+      - name: Azure OIDC Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Derive ACR_NAME from server
+        run: echo "ACR_NAME=${ACR_LOGIN_SERVER%%.azurecr.io}" >> "$GITHUB_ENV"
+
+      - name: Azure CLI - Login to ACR
+        run: az acr login --name "$ACR_NAME"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker meta (tags/labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ACR_LOGIN_SERVER }}/${{ vars.IMAGE_NAME || github.event.repository.name }}
+          tags: |
+            type=ref,event=branch
+            type=sha,format=long,prefix=sha-
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/heads/main') }}
+
+      - name: Build & Push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Summary
+        run: |
+          {
+            echo "## Image pushed"
+            echo "- Registry: \`${{ env.ACR_LOGIN_SERVER }}\`"
+            echo "- Image: \`${{ env.ACR_LOGIN_SERVER }}/${{ vars.IMAGE_NAME || github.event.repository.name }}\`"
+            echo "- Tags:"
+            echo '${{ steps.meta.outputs.tags }}' | tr ' ' '\n'
+          } >> "$GITHUB_STEP_SUMMARY"
