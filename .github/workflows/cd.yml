@@ -1,4 +1,3 @@
----
 name: CD - Deploy to ACA (auto by branch)
 
 on:
@@ -13,12 +12,12 @@ permissions:
 jobs:
   deploy-dev:
     name: Deploy DEV
+    # Solo cuando el CI del branch develop terminó OK
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'develop' }}
-    # LIGA ESTE JOB AL ENV dev PARA QUE RESUELVA vars.* DEL ENVIRONMENT DEV
+    # Necesario para que vars.* apunten al Environment DEV de ESTE repo
     environment: dev
     uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
     with:
-      # INPUTS QUE ESPERA EL REUSABLE
       environment: dev
       azure_client_id: ${{ vars.AZURE_CLIENT_ID }}
       azure_tenant_id: ${{ vars.AZURE_TENANT_ID }}
@@ -39,8 +38,6 @@ jobs:
         APP_ENV=develop
         HTTP_CONCURRENCY=${{ vars.HTTP_CONCURRENCY }}
       acr_login_server: ${{ vars.ACR_LOGIN_SERVER }}
-      # si tu ACR usa identidad asignada, pasa el clientId de esa identidad;
-      # si no, déjalo vacío y el reusable ignorará ese paso
       acr_identity_client_id: ${{ vars.AZURE_CLIENT_ID }}
 
   deploy-staging:

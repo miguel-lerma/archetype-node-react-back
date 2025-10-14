@@ -1,4 +1,3 @@
----
 name: CI - Build & Push Image
 
 on:
@@ -13,6 +12,7 @@ permissions:
 
 jobs:
   tests:
+    # Llama al reusable del repo pipelines
     uses: miguel-lerma/pipelines/.github/workflows/build-node-api.yml@main
     with:
       app_dir: "."
@@ -29,7 +29,7 @@ jobs:
     needs: tests
     if: github.event_name == 'push'
 
-    # Mapear a tu naming de environments (opcional, solo para visibilidad)
+    # Solo para visibilidad en la UI de Actions
     environment:
       name: ${{ github.ref_name == 'main' && 'prd' || github.ref_name == 'staging' && 'stg' || github.ref_name == 'develop' && 'dev' || 'dev' }}
 
@@ -80,11 +80,8 @@ jobs:
         with:
           images: ${{ env.ACR_LOGIN_SERVER }}/${{ vars.IMAGE_NAME || github.event.repository.name }}
           tags: |
-            # rama (develop, staging, main)
             type=ref,event=branch
-            # SHA LARGO y con prefijo claro => sha-<40>
             type=sha,format=long,prefix=sha-
-            # latest solo en main
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/heads/main') }}
 
       - name: Build & Push
