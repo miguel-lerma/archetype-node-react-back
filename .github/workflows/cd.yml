@@ -2,7 +2,7 @@ name: CD - Backend (caller)
 
 on:
   workflow_run:
-    workflows: ["CI - Build & Push Image"]  # <-- ajusta si tu CI se llama distinto
+    workflows: ["CI - Build & Push Image"]   # nombre exacto de tu CI
     types: [completed]
 
 permissions:
@@ -21,9 +21,9 @@ jobs:
     runs-on: ubuntu-latest
     environment: dev
     outputs:
-      REGISTRY: ${{ steps.cfg.outputs.REGISTRY }}
+      REGISTRY:   ${{ steps.cfg.outputs.REGISTRY }}
       IMAGE_REPO: ${{ steps.cfg.outputs.IMAGE_REPO }}
-      SHA: ${{ steps.cfg.outputs.SHA }}
+      SHA:        ${{ steps.cfg.outputs.SHA }}
     steps:
       - id: cfg
         shell: bash
@@ -43,11 +43,11 @@ jobs:
       resource_group: ITX-RG-01
       location: eastus
       aca_env: env-lab-aca
-      aca_be_name: be-dev
+      app_name: be-dev
 
       registry_login_server: ${{ needs.dev-meta.outputs.REGISTRY }}
-      image_repo: ${{ needs.dev-meta.outputs.IMAGE_REPO }}
-      sha: ${{ needs.dev-meta.outputs.SHA }}
+      image_repo:           ${{ needs.dev-meta.outputs.IMAGE_REPO }}
+      sha:                  ${{ needs.dev-meta.outputs.SHA }}
 
       ingress: internal
       target_port: "8080"
@@ -55,7 +55,6 @@ jobs:
       memory: "0.5Gi"
       min_replicas: "1"
       max_replicas: "1"
-      app_env: dev
     secrets: inherit
 
 # -------- QA --------
@@ -65,9 +64,9 @@ jobs:
     runs-on: ubuntu-latest
     environment: qa
     outputs:
-      REGISTRY: ${{ steps.cfg.outputs.REGISTRY }}
+      REGISTRY:   ${{ steps.cfg.outputs.REGISTRY }}
       IMAGE_REPO: ${{ steps.cfg.outputs.IMAGE_REPO }}
-      SHA: ${{ steps.cfg.outputs.SHA }}
+      SHA:        ${{ steps.cfg.outputs.SHA }}
     steps:
       - id: cfg
         shell: bash
@@ -81,17 +80,17 @@ jobs:
     name: Deploy BE → QA
     if: ${{ always() && needs.qa-meta.result == 'success' }}
     needs: [qa-meta]
-    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca-be.yml@main
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
     with:
       environment: qa
       resource_group: ITX-RG-01
       location: eastus
       aca_env: env-lab-aca
-      aca_be_name: be-qa
+      app_name: be-qa
 
       registry_login_server: ${{ needs.qa-meta.outputs.REGISTRY }}
-      image_repo: ${{ needs.qa-meta.outputs.IMAGE_REPO }}
-      sha: ${{ needs.qa-meta.outputs.SHA }}
+      image_repo:           ${{ needs.qa-meta.outputs.IMAGE_REPO }}
+      sha:                  ${{ needs.qa-meta.outputs.SHA }}
 
       ingress: internal
       target_port: "8080"
@@ -99,7 +98,6 @@ jobs:
       memory: "0.5Gi"
       min_replicas: "1"
       max_replicas: "1"
-      app_env: qa
     secrets: inherit
 
 # -------- PRD --------
@@ -109,9 +107,9 @@ jobs:
     runs-on: ubuntu-latest
     environment: prd
     outputs:
-      REGISTRY: ${{ steps.cfg.outputs.REGISTRY }}
+      REGISTRY:   ${{ steps.cfg.outputs.REGISTRY }}
       IMAGE_REPO: ${{ steps.cfg.outputs.IMAGE_REPO }}
-      SHA: ${{ steps.cfg.outputs.SHA }}
+      SHA:        ${{ steps.cfg.outputs.SHA }}
     steps:
       - id: cfg
         shell: bash
@@ -125,17 +123,17 @@ jobs:
     name: Deploy BE → PRD
     if: ${{ always() && needs.prd-meta.result == 'success' }}
     needs: [prd-meta]
-    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca-be.yml@main
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
     with:
       environment: prd
       resource_group: ITX-RG-01
       location: eastus
       aca_env: env-lab-aca
-      aca_be_name: be-prd
+      app_name: be-prd
 
       registry_login_server: ${{ needs.prd-meta.outputs.REGISTRY }}
-      image_repo: ${{ needs.prd-meta.outputs.IMAGE_REPO }}
-      sha: ${{ needs.prd-meta.outputs.SHA }}
+      image_repo:           ${{ needs.prd-meta.outputs.IMAGE_REPO }}
+      sha:                  ${{ needs.prd-meta.outputs.SHA }}
 
       ingress: internal
       target_port: "8080"
@@ -143,5 +141,4 @@ jobs:
       memory: "0.5Gi"
       min_replicas: "1"
       max_replicas: "2"
-      app_env: production
     secrets: inherit
