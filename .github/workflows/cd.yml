@@ -1,8 +1,8 @@
-name: CD - Frontend (caller)
+name: CD - Backend (caller)
 
 on:
   workflow_run:
-    workflows: ["CI - Frontend Build & Push Image"]
+    workflows: ["CI - Build & Push Image"]
     types: [completed]
 
 permissions:
@@ -10,14 +10,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: cd-fe-${{ github.event.workflow_run.head_branch }}
+  group: cd-be-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: true
 
-<<<<<<< HEAD
 # ---------- DEV ----------
-=======
-# ---------------- DEV ----------------
->>>>>>> 93e1ba7cfdd1295ad21a8edfa8a136f44771b1c7
 jobs:
   dev-meta:
     name: Resolve env vars (DEV)
@@ -29,54 +25,40 @@ jobs:
       IMAGE_REPO: ${{ steps.cfg.outputs.IMAGE_REPO }}
       SHA: ${{ steps.cfg.outputs.SHA }}
     steps:
-      - name: Read environment vars
-        id: cfg
+      - id: cfg
         shell: bash
         run: |
           set -euo pipefail
           echo "REGISTRY=${{ vars.ACR_LOGIN_SERVER }}" >> "$GITHUB_OUTPUT"
-          echo "IMAGE_REPO=archetype-front" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_REPO=archetype-back" >> "$GITHUB_OUTPUT"
           echo "SHA=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
 
   deploy-dev:
-    name: Deploy FE → DEV
+    name: Deploy BE → DEV
     if: ${{ always() && needs.dev-meta.result == 'success' }}
     needs: [dev-meta]
-    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca-fe.yml@main
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
     with:
       environment: dev
       resource_group: ITX-RG-01
       location: eastus
       aca_env: env-lab-aca
-<<<<<<< HEAD
-=======
-      aca_fe_name: fe-dev
->>>>>>> 93e1ba7cfdd1295ad21a8edfa8a136f44771b1c7
       aca_be_name: be-dev
 
       registry_login_server: ${{ needs.dev-meta.outputs.REGISTRY }}
       image_repo: ${{ needs.dev-meta.outputs.IMAGE_REPO }}
       sha: ${{ needs.dev-meta.outputs.SHA }}
 
-<<<<<<< HEAD
       ingress: internal
       target_port: "8080"
-=======
-      ingress: external
-      target_port: "80"
->>>>>>> 93e1ba7cfdd1295ad21a8edfa8a136f44771b1c7
       cpu: "0.25"
       memory: "0.5Gi"
-      min_replicas: "0"
+      min_replicas: "1"
       max_replicas: "1"
       app_env: dev
     secrets: inherit
 
-<<<<<<< HEAD
 # ---------- QA ----------
-=======
-# ---------------- QA ----------------
->>>>>>> 93e1ba7cfdd1295ad21a8edfa8a136f44771b1c7
   qa-meta:
     name: Resolve env vars (QA)
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'staging' }}
@@ -87,51 +69,40 @@ jobs:
       IMAGE_REPO: ${{ steps.cfg.outputs.IMAGE_REPO }}
       SHA: ${{ steps.cfg.outputs.SHA }}
     steps:
-      - name: Read environment vars
-        id: cfg
+      - id: cfg
         shell: bash
         run: |
           set -euo pipefail
           echo "REGISTRY=${{ vars.ACR_LOGIN_SERVER }}" >> "$GITHUB_OUTPUT"
-          echo "IMAGE_REPO=archetype-front" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_REPO=archetype-back" >> "$GITHUB_OUTPUT"
           echo "SHA=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
 
   deploy-qa:
-    name: Deploy FE → QA
+    name: Deploy BE → QA
     if: ${{ always() && needs.qa-meta.result == 'success' }}
     needs: [qa-meta]
-    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca-fe.yml@main
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
     with:
       environment: qa
       resource_group: ITX-RG-01
       location: eastus
       aca_env: env-lab-aca
-      aca_fe_name: fe-qa
       aca_be_name: be-qa
 
       registry_login_server: ${{ needs.qa-meta.outputs.REGISTRY }}
       image_repo: ${{ needs.qa-meta.outputs.IMAGE_REPO }}
       sha: ${{ needs.qa-meta.outputs.SHA }}
 
-<<<<<<< HEAD
       ingress: internal
       target_port: "8080"
-=======
-      ingress: external
-      target_port: "80"
->>>>>>> 93e1ba7cfdd1295ad21a8edfa8a136f44771b1c7
       cpu: "0.25"
       memory: "0.5Gi"
-      min_replicas: "0"
+      min_replicas: "1"
       max_replicas: "1"
       app_env: qa
     secrets: inherit
 
-<<<<<<< HEAD
 # ---------- PRD ----------
-=======
-# ---------------- PRD ----------------
->>>>>>> 93e1ba7cfdd1295ad21a8edfa8a136f44771b1c7
   prd-meta:
     name: Resolve env vars (PRD)
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
@@ -142,39 +113,32 @@ jobs:
       IMAGE_REPO: ${{ steps.cfg.outputs.IMAGE_REPO }}
       SHA: ${{ steps.cfg.outputs.SHA }}
     steps:
-      - name: Read environment vars
-        id: cfg
+      - id: cfg
         shell: bash
         run: |
           set -euo pipefail
           echo "REGISTRY=${{ vars.ACR_LOGIN_SERVER }}" >> "$GITHUB_OUTPUT"
-          echo "IMAGE_REPO=archetype-front" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_REPO=archetype-back" >> "$GITHUB_OUTPUT"
           echo "SHA=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
 
   deploy-prd:
-    name: Deploy FE → PRD
+    name: Deploy BE → PRD
     if: ${{ always() && needs.prd-meta.result == 'success' }}
     needs: [prd-meta]
-    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca-fe.yml@main
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
     with:
       environment: prd
-      resource_group: ITX-RG-01 
+      resource_group: ITX-RG-01
       location: eastus
       aca_env: env-lab-aca
-      aca_fe_name: fe-prd
       aca_be_name: be-prd
 
       registry_login_server: ${{ needs.prd-meta.outputs.REGISTRY }}
       image_repo: ${{ needs.prd-meta.outputs.IMAGE_REPO }}
       sha: ${{ needs.prd-meta.outputs.SHA }}
 
-<<<<<<< HEAD
       ingress: internal
       target_port: "8080"
-=======
-      ingress: external
-      target_port: "80"
->>>>>>> 93e1ba7cfdd1295ad21a8edfa8a136f44771b1c7
       cpu: "0.25"
       memory: "0.5Gi"
       min_replicas: "1"
