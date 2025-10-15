@@ -1,8 +1,8 @@
-name: CD - Backend (caller)
+name: CD - Frontend (caller)
 
 on:
   workflow_run:
-    workflows: ["CI - Build & Push Image"]
+    workflows: ["CI - Frontend Build & Push Image"]
     types: [completed]
 
 permissions:
@@ -10,10 +10,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: cd-be-${{ github.event.workflow_run.head_branch }}
+  group: cd-fe-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: true
 
-# -------- DEV --------
+# ---------------- DEV ----------------
 jobs:
   dev-meta:
     name: Resolve env vars (DEV)
@@ -21,118 +21,130 @@ jobs:
     runs-on: ubuntu-latest
     environment: dev
     outputs:
-      REGISTRY:   ${{ steps.cfg.outputs.REGISTRY }}
+      REGISTRY: ${{ steps.cfg.outputs.REGISTRY }}
       IMAGE_REPO: ${{ steps.cfg.outputs.IMAGE_REPO }}
-      SHA:        ${{ steps.cfg.outputs.SHA }}
+      SHA: ${{ steps.cfg.outputs.SHA }}
     steps:
-      - id: cfg
+      - name: Read environment vars
+        id: cfg
         shell: bash
         run: |
           set -euo pipefail
           echo "REGISTRY=${{ vars.ACR_LOGIN_SERVER }}" >> "$GITHUB_OUTPUT"
-          echo "IMAGE_REPO=archetype-back" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_REPO=archetype-front" >> "$GITHUB_OUTPUT"
           echo "SHA=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
 
   deploy-dev:
-    name: Deploy BE → DEV
+    name: Deploy FE → DEV
     if: ${{ always() && needs.dev-meta.result == 'success' }}
     needs: [dev-meta]
-    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca-fe.yml@main
     with:
       environment: dev
       resource_group: ITX-RG-01
       location: eastus
       aca_env: env-lab-aca
-      aca_be_name: be-dev                # <─ clave correcta
+      aca_fe_name: fe-dev
+      aca_be_name: be-dev
+
       registry_login_server: ${{ needs.dev-meta.outputs.REGISTRY }}
-      image_repo:           ${{ needs.dev-meta.outputs.IMAGE_REPO }}
-      sha:                  ${{ needs.dev-meta.outputs.SHA }}
-      ingress: internal
-      target_port: "8080"
+      image_repo: ${{ needs.dev-meta.outputs.IMAGE_REPO }}
+      sha: ${{ needs.dev-meta.outputs.SHA }}
+
+      ingress: external
+      target_port: "80"
       cpu: "0.25"
       memory: "0.5Gi"
-      min_replicas: "1"
+      min_replicas: "0"
       max_replicas: "1"
-      app_env: dev                       # <─ requerido por el reusable
+      app_env: dev
     secrets: inherit
 
-# -------- QA --------
+# ---------------- QA ----------------
   qa-meta:
     name: Resolve env vars (QA)
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'staging' }}
     runs-on: ubuntu-latest
     environment: qa
     outputs:
-      REGISTRY:   ${{ steps.cfg.outputs.REGISTRY }}
+      REGISTRY: ${{ steps.cfg.outputs.REGISTRY }}
       IMAGE_REPO: ${{ steps.cfg.outputs.IMAGE_REPO }}
-      SHA:        ${{ steps.cfg.outputs.SHA }}
+      SHA: ${{ steps.cfg.outputs.SHA }}
     steps:
-      - id: cfg
+      - name: Read environment vars
+        id: cfg
         shell: bash
         run: |
           set -euo pipefail
           echo "REGISTRY=${{ vars.ACR_LOGIN_SERVER }}" >> "$GITHUB_OUTPUT"
-          echo "IMAGE_REPO=archetype-back" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_REPO=archetype-front" >> "$GITHUB_OUTPUT"
           echo "SHA=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
 
   deploy-qa:
-    name: Deploy BE → QA
+    name: Deploy FE → QA
     if: ${{ always() && needs.qa-meta.result == 'success' }}
     needs: [qa-meta]
-    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca-fe.yml@main
     with:
       environment: qa
       resource_group: ITX-RG-01
       location: eastus
       aca_env: env-lab-aca
+      aca_fe_name: fe-qa
       aca_be_name: be-qa
+
       registry_login_server: ${{ needs.qa-meta.outputs.REGISTRY }}
-      image_repo:           ${{ needs.qa-meta.outputs.IMAGE_REPO }}
-      sha:                  ${{ needs.qa-meta.outputs.SHA }}
-      ingress: internal
-      target_port: "8080"
+      image_repo: ${{ needs.qa-meta.outputs.IMAGE_REPO }}
+      sha: ${{ needs.qa-meta.outputs.SHA }}
+
+      ingress: external
+      target_port: "80"
       cpu: "0.25"
       memory: "0.5Gi"
-      min_replicas: "1"
+      min_replicas: "0"
       max_replicas: "1"
       app_env: qa
     secrets: inherit
 
-# -------- PRD --------
+# ---------------- PRD ----------------
   prd-meta:
     name: Resolve env vars (PRD)
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
     runs-on: ubuntu-latest
     environment: prd
     outputs:
-      REGISTRY:   ${{ steps.cfg.outputs.REGISTRY }}
+      REGISTRY: ${{ steps.cfg.outputs.REGISTRY }}
       IMAGE_REPO: ${{ steps.cfg.outputs.IMAGE_REPO }}
-      SHA:        ${{ steps.cfg.outputs.SHA }}
+      SHA: ${{ steps.cfg.outputs.SHA }}
     steps:
-      - id: cfg
+      - name: Read environment vars
+        id: cfg
         shell: bash
         run: |
           set -euo pipefail
           echo "REGISTRY=${{ vars.ACR_LOGIN_SERVER }}" >> "$GITHUB_OUTPUT"
-          echo "IMAGE_REPO=archetype-back" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_REPO=archetype-front" >> "$GITHUB_OUTPUT"
           echo "SHA=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
 
   deploy-prd:
-    name: Deploy BE → PRD
+    name: Deploy FE → PRD
     if: ${{ always() && needs.prd-meta.result == 'success' }}
     needs: [prd-meta]
-    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca-fe.yml@main
     with:
       environment: prd
-      resource_group: ITX-RG-01
+      resource_group: ITX-RG-01 
       location: eastus
       aca_env: env-lab-aca
+      aca_fe_name: fe-prd
       aca_be_name: be-prd
+
       registry_login_server: ${{ needs.prd-meta.outputs.REGISTRY }}
-      image_repo:           ${{ needs.prd-meta.outputs.IMAGE_REPO }}
-      sha:                  ${{ needs.prd-meta.outputs.SHA }}
-      ingress: internal
-      target_port: "8080"
+      image_repo: ${{ needs.prd-meta.outputs.IMAGE_REPO }}
+      sha: ${{ needs.prd-meta.outputs.SHA }}
+
+      ingress: external
+      target_port: "80"
       cpu: "0.25"
       memory: "0.5Gi"
       min_replicas: "1"
