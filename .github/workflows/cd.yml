@@ -6,51 +6,76 @@ on:
     branches: ["develop"]
   workflow_dispatch:
 
+# Necesario para OIDC y poder leer variables/vars
 permissions:
   id-token: write
   contents: read
 
 concurrency:
-  group: deploy-dev-${{ github.ref }}
+  group: cd-be-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: true
 
 env:
+  # Config destino
   RESOURCE_GROUP: ITX-RG-01
   ACA_ENVIRONMENT: env-lab-aca
   LOCATION: eastus
   APP_NAME: be-dev
-  IMAGE_REPOSITORY: archetype-back
+  IMAGE_REPOSITORY: archetype-back  # nombre del repo en tu ACR (sin el login server)
 
 jobs:
-  deploy:
-    name: Deploy to DEV
+  dev-meta:
+    name: Resolve env vars (DEV)
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'develop' }}
     runs-on: ubuntu-latest
-    environment: dev
+    environment: dev   # habilita ${{ vars.* }} del Environment "dev"
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Azure Login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Preparar variables de imagen
-        id: prep
+      - id: cfg
         shell: bash
         run: |
           set -euo pipefail
-          sha="${{ github.sha }}"
-          img="${{ vars.ACR_LOGIN_SERVER }}/${{ env.IMAGE_REPOSITORY }}:sha-${sha}"
-          {
-            printf 'sha=%s\n' "$sha"
-            printf 'image=%s\n' "$img"
-          } >> "$GITHUB_OUTPUT"
+          echo "REGISTRY=${{ vars.ACR_LOGIN_SERVER }}" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_REPO=archetype-back" >> "$GITHUB_OUTPUT"
+          echo "SHA=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
 
-      - name: Instalar/actualizar extensión containerapp
+  deploy-dev:
+    name: Deploy BE → DEV
+    if: ${{ always() && needs.dev-meta.result == 'success' }}
+    needs: [dev-meta]
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca-be.yml@main
+    with:
+      environment: dev
+      resource_group: ITX-RG-01
+      location: eastus
+      aca_env: env-lab-aca
+      aca_be_name: be-dev
+
+      registry_login_server: ${{ needs.dev-meta.outputs.REGISTRY }}
+      image_repo: ${{ needs.dev-meta.outputs.IMAGE_REPO }}
+      sha: ${{ needs.dev-meta.outputs.SHA }}
+
+      ingress: internal
+      target_port: "8080"
+      cpu: "0.25"
+      memory: "0.5Gi"
+      min_replicas: "1"
+      max_replicas: "1"
+      app_env: dev
+    secrets: inherit
+
+# -------- QA --------
+  qa-meta:
+    name: Resolve env vars (QA)
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'staging' }}
+    runs-on: ubuntu-latest
+    environment: qa
+    outputs:
+      REGISTRY: ${{ steps.cfg.outputs.REGISTRY }}
+      IMAGE_REPO: ${{ steps.cfg.outputs.IMAGE_REPO }}
+      SHA: ${{ steps.cfg.outputs.SHA }}
+    steps:
+      - id: cfg
         shell: bash
         run: |
           set -euo pipefail
@@ -78,7 +103,6 @@ jobs:
             az acr show -n "$ACR_NAME" -o none
           fi
 
-      # Opcional: solo si usas identidad de usuario para el pull del ACR
       - name: Asociar ACR + identidad (si aplica)
         if: ${{ vars.ACR_LOGIN_SERVER != '' && vars.ACA_MI_CLIENT_ID != '' }}
         shell: bash
@@ -89,37 +113,34 @@ jobs:
           ACR_MI: ${{ vars.ACA_MI_CLIENT_ID }}
         run: |
           set -euo pipefail
+          # NOTA: algunos az CLI no aceptan --yes en este comando; lo omitimos.
           az containerapp registry set \
             -g "$RG" -n "$APP" \
             --server "$ACR_LOGIN" \
             --identity "$ACR_MI"
 
-      - name: Desplegar imagen en la ACA (internal:8080 + minReplicas=1)
+      - name: Desplegar imagen en la ACA
         shell: bash
         env:
           RG: ${{ env.RESOURCE_GROUP }}
           APP: ${{ env.APP_NAME }}
           IMAGE_REF: ${{ steps.prep.outputs.image }}
-
-          # 👇 Cambios clave
-          INGRESS: "internal"
-          TARGET_PORT: "8080"
+          INGRESS: ""
+          TARGET_PORT: ""
           CPU: ""
           MEMORY: ""
-          MIN_REPLICAS: "1"
+          MIN_REPLICAS: ""
           MAX_REPLICAS: ""
-
-          # Ajusta lo que tu app necesita. PORT=8080 es importante.
           EXTRA_ENV: |
-            APP_ENV=dev
             NODE_ENV=production
-            PORT=8080
             LOG_LEVEL=info
         run: |
           set -euo pipefail
+
           echo "Imagen a desplegar: $IMAGE_REF"
 
           PARAMS=( -g "$RG" -n "$APP" --image "$IMAGE_REF" )
+
           [ -n "${INGRESS:-}" ]      && PARAMS+=( --ingress "$INGRESS" )
           [ -n "${TARGET_PORT:-}" ]  && PARAMS+=( --target-port "$TARGET_PORT" )
           [ -n "${CPU:-}" ]          && PARAMS+=( --cpu "$CPU" )
