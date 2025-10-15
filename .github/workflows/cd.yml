@@ -37,7 +37,7 @@ jobs:
     name: Deploy BE → DEV
     if: ${{ always() && needs.dev-meta.result == 'success' }}
     needs: [dev-meta]
-    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca-be.yml@main
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
     with:
       environment: dev
       resource_group: ITX-RG-01
