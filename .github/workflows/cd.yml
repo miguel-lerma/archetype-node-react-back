@@ -2,7 +2,7 @@ name: CD - Backend (caller)
 
 on:
   workflow_run:
-    workflows: ["CI - Backend Build & Push Image"]  # <-- ajusta si tu CI se llama distinto
+    workflows: ["CI - Build & Push Image"]  # <-- ajusta si tu CI se llama distinto
     types: [completed]
 
 permissions:
