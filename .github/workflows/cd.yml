@@ -6,6 +6,7 @@ on:
     branches: ["develop"]
   workflow_dispatch:
 
+# Necesario para OIDC y poder leer variables/vars
 permissions:
   id-token: write
   contents: read
@@ -15,17 +16,18 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # Config destino
   RESOURCE_GROUP: ITX-RG-01
   ACA_ENVIRONMENT: env-lab-aca
   LOCATION: eastus
   APP_NAME: be-dev
-  IMAGE_REPOSITORY: archetype-back
+  IMAGE_REPOSITORY: archetype-back  # nombre del repo en tu ACR (sin el login server)
 
 jobs:
   deploy:
     name: Deploy to DEV
     runs-on: ubuntu-latest
-    environment: dev
+    environment: dev   # habilita ${{ vars.* }} del Environment "dev"
 
     steps:
       - name: Checkout
@@ -78,7 +80,6 @@ jobs:
             az acr show -n "$ACR_NAME" -o none
           fi
 
-      # Opcional: solo si usas identidad de usuario para el pull del ACR
       - name: Asociar ACR + identidad (si aplica)
         if: ${{ vars.ACR_LOGIN_SERVER != '' && vars.ACA_MI_CLIENT_ID != '' }}
         shell: bash
@@ -89,37 +90,34 @@ jobs:
           ACR_MI: ${{ vars.ACA_MI_CLIENT_ID }}
         run: |
           set -euo pipefail
+          # NOTA: algunos az CLI no aceptan --yes en este comando; lo omitimos.
           az containerapp registry set \
             -g "$RG" -n "$APP" \
             --server "$ACR_LOGIN" \
             --identity "$ACR_MI"
 
-      - name: Desplegar imagen en la ACA (internal:8080 + minReplicas=1)
+      - name: Desplegar imagen en la ACA
         shell: bash
         env:
           RG: ${{ env.RESOURCE_GROUP }}
           APP: ${{ env.APP_NAME }}
           IMAGE_REF: ${{ steps.prep.outputs.image }}
-
-          # 👇 Cambios clave
-          INGRESS: "internal"
-          TARGET_PORT: "8080"
+          INGRESS: ""
+          TARGET_PORT: ""
           CPU: ""
           MEMORY: ""
-          MIN_REPLICAS: "1"
+          MIN_REPLICAS: ""
           MAX_REPLICAS: ""
-
-          # Ajusta lo que tu app necesita. PORT=8080 es importante.
           EXTRA_ENV: |
-            APP_ENV=dev
             NODE_ENV=production
-            PORT=8080
             LOG_LEVEL=info
         run: |
           set -euo pipefail
+
           echo "Imagen a desplegar: $IMAGE_REF"
 
           PARAMS=( -g "$RG" -n "$APP" --image "$IMAGE_REF" )
+
           [ -n "${INGRESS:-}" ]      && PARAMS+=( --ingress "$INGRESS" )
           [ -n "${TARGET_PORT:-}" ]  && PARAMS+=( --target-port "$TARGET_PORT" )
           [ -n "${CPU:-}" ]          && PARAMS+=( --cpu "$CPU" )
