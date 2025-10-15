@@ -13,8 +13,8 @@ concurrency:
   group: cd-be-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: true
 
-# -------- DEV --------
 jobs:
+  # -------- DEV --------
   dev-meta:
     name: Resolve env vars (DEV)
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'develop' }}
@@ -43,7 +43,7 @@ jobs:
       resource_group: ITX-RG-01
       location: eastus
       aca_env: env-lab-aca
-      aca_be_name: be-dev                # <─ clave correcta
+      aca_be_name: be-dev              # <- requerido por el reusable
       registry_login_server: ${{ needs.dev-meta.outputs.REGISTRY }}
       image_repo:           ${{ needs.dev-meta.outputs.IMAGE_REPO }}
       sha:                  ${{ needs.dev-meta.outputs.SHA }}
@@ -53,10 +53,10 @@ jobs:
       memory: "0.5Gi"
       min_replicas: "1"
       max_replicas: "1"
-      app_env: dev                       # <─ requerido por el reusable
+      app_env: dev                     # <- requerido por el reusable
     secrets: inherit
 
-# -------- QA --------
+  # -------- QA --------
   qa-meta:
     name: Resolve env vars (QA)
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'staging' }}
@@ -98,7 +98,7 @@ jobs:
       app_env: qa
     secrets: inherit
 
-# -------- PRD --------
+  # -------- PRD --------
   prd-meta:
     name: Resolve env vars (PRD)
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
