@@ -1,12 +1,10 @@
----
-name: Deploy to DEV
+name: CD - Backend (caller)
 
 on:
-  push:
-    branches: ["develop"]
-  workflow_dispatch:
+  workflow_run:
+    workflows: ["CI - Backend Build & Push Image"]  # <-- ajusta si tu CI se llama distinto
+    types: [completed]
 
-# Necesario para OIDC y poder leer variables/vars
 permissions:
   id-token: write
   contents: read
@@ -15,21 +13,17 @@ concurrency:
   group: cd-be-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: true
 
-env:
-  # Config destino
-  RESOURCE_GROUP: ITX-RG-01
-  ACA_ENVIRONMENT: env-lab-aca
-  LOCATION: eastus
-  APP_NAME: be-dev
-  IMAGE_REPOSITORY: archetype-back  # nombre del repo en tu ACR (sin el login server)
-
+# -------- DEV --------
 jobs:
   dev-meta:
     name: Resolve env vars (DEV)
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'develop' }}
     runs-on: ubuntu-latest
-    environment: dev   # habilita ${{ vars.* }} del Environment "dev"
-
+    environment: dev
+    outputs:
+      REGISTRY: ${{ steps.cfg.outputs.REGISTRY }}
+      IMAGE_REPO: ${{ steps.cfg.outputs.IMAGE_REPO }}
+      SHA: ${{ steps.cfg.outputs.SHA }}
     steps:
       - id: cfg
         shell: bash
@@ -79,85 +73,75 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          az version
-          if ! az extension show --name containerapp >/dev/null 2>&1; then
-            az extension add --name containerapp -y
-          else
-            az extension update --name containerapp -y || true
-          fi
+          echo "REGISTRY=${{ vars.ACR_LOGIN_SERVER }}" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_REPO=archetype-back" >> "$GITHUB_OUTPUT"
+          echo "SHA=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
 
-      - name: Validaciones rápidas de recursos
+  deploy-qa:
+    name: Deploy BE → QA
+    if: ${{ always() && needs.qa-meta.result == 'success' }}
+    needs: [qa-meta]
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca-be.yml@main
+    with:
+      environment: qa
+      resource_group: ITX-RG-01
+      location: eastus
+      aca_env: env-lab-aca
+      aca_be_name: be-qa
+
+      registry_login_server: ${{ needs.qa-meta.outputs.REGISTRY }}
+      image_repo: ${{ needs.qa-meta.outputs.IMAGE_REPO }}
+      sha: ${{ needs.qa-meta.outputs.SHA }}
+
+      ingress: internal
+      target_port: "8080"
+      cpu: "0.25"
+      memory: "0.5Gi"
+      min_replicas: "1"
+      max_replicas: "1"
+      app_env: qa
+    secrets: inherit
+
+# -------- PRD --------
+  prd-meta:
+    name: Resolve env vars (PRD)
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
+    runs-on: ubuntu-latest
+    environment: prd
+    outputs:
+      REGISTRY: ${{ steps.cfg.outputs.REGISTRY }}
+      IMAGE_REPO: ${{ steps.cfg.outputs.IMAGE_REPO }}
+      SHA: ${{ steps.cfg.outputs.SHA }}
+    steps:
+      - id: cfg
         shell: bash
-        env:
-          RG: ${{ env.RESOURCE_GROUP }}
-          ACA_ENV: ${{ env.ACA_ENVIRONMENT }}
-          APP: ${{ env.APP_NAME }}
-          ACR_LOGIN: ${{ vars.ACR_LOGIN_SERVER }}
         run: |
           set -euo pipefail
-          az group show -n "$RG" -o none
-          az containerapp env show -g "$RG" -n "$ACA_ENV" -o none
-          az containerapp show -g "$RG" -n "$APP" -o none
-          if [ -n "${ACR_LOGIN:-}" ]; then
-            ACR_NAME="${ACR_LOGIN%%.azurecr.io}"
-            az acr show -n "$ACR_NAME" -o none
-          fi
+          echo "REGISTRY=${{ vars.ACR_LOGIN_SERVER }}" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_REPO=archetype-back" >> "$GITHUB_OUTPUT"
+          echo "SHA=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
 
-      - name: Asociar ACR + identidad (si aplica)
-        if: ${{ vars.ACR_LOGIN_SERVER != '' && vars.ACA_MI_CLIENT_ID != '' }}
-        shell: bash
-        env:
-          RG: ${{ env.RESOURCE_GROUP }}
-          APP: ${{ env.APP_NAME }}
-          ACR_LOGIN: ${{ vars.ACR_LOGIN_SERVER }}
-          ACR_MI: ${{ vars.ACA_MI_CLIENT_ID }}
-        run: |
-          set -euo pipefail
-          # NOTA: algunos az CLI no aceptan --yes en este comando; lo omitimos.
-          az containerapp registry set \
-            -g "$RG" -n "$APP" \
-            --server "$ACR_LOGIN" \
-            --identity "$ACR_MI"
+  deploy-prd:
+    name: Deploy BE → PRD
+    if: ${{ always() && needs.prd-meta.result == 'success' }}
+    needs: [prd-meta]
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca-be.yml@main
+    with:
+      environment: prd
+      resource_group: ITX-RG-01
+      location: eastus
+      aca_env: env-lab-aca
+      aca_be_name: be-prd
 
-      - name: Desplegar imagen en la ACA
-        shell: bash
-        env:
-          RG: ${{ env.RESOURCE_GROUP }}
-          APP: ${{ env.APP_NAME }}
-          IMAGE_REF: ${{ steps.prep.outputs.image }}
-          INGRESS: ""
-          TARGET_PORT: ""
-          CPU: ""
-          MEMORY: ""
-          MIN_REPLICAS: ""
-          MAX_REPLICAS: ""
-          EXTRA_ENV: |
-            NODE_ENV=production
-            LOG_LEVEL=info
-        run: |
-          set -euo pipefail
+      registry_login_server: ${{ needs.prd-meta.outputs.REGISTRY }}
+      image_repo: ${{ needs.prd-meta.outputs.IMAGE_REPO }}
+      sha: ${{ needs.prd-meta.outputs.SHA }}
 
-          echo "Imagen a desplegar: $IMAGE_REF"
-
-          PARAMS=( -g "$RG" -n "$APP" --image "$IMAGE_REF" )
-
-          [ -n "${INGRESS:-}" ]      && PARAMS+=( --ingress "$INGRESS" )
-          [ -n "${TARGET_PORT:-}" ]  && PARAMS+=( --target-port "$TARGET_PORT" )
-          [ -n "${CPU:-}" ]          && PARAMS+=( --cpu "$CPU" )
-          [ -n "${MEMORY:-}" ]       && PARAMS+=( --memory "$MEMORY" )
-          [ -n "${MIN_REPLICAS:-}" ] && PARAMS+=( --min-replicas "$MIN_REPLICAS" )
-          [ -n "${MAX_REPLICAS:-}" ] && PARAMS+=( --max-replicas "$MAX_REPLICAS" )
-
-          if [ -n "${EXTRA_ENV:-}" ]; then
-            while IFS= read -r line; do
-              [ -z "$line" ] && continue
-              PARAMS+=( --set-env-vars "$line" )
-            done <<< "$EXTRA_ENV"
-          fi
-
-          az containerapp update "${PARAMS[@]}"
-          echo "✅ Deploy completado."
-
-      - name: Logout Azure (limpieza)
-        if: always()
-        run: az account clear || true
+      ingress: internal
+      target_port: "8080"
+      cpu: "0.25"
+      memory: "0.5Gi"
+      min_replicas: "1"
+      max_replicas: "2"
+      app_env: production
+    secrets: inherit
