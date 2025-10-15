@@ -13,17 +13,17 @@ concurrency:
   group: cd-be-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: true
 
+# ---------- DEV ----------
 jobs:
-  # -------- DEV --------
   dev-meta:
     name: Resolve env vars (DEV)
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'develop' }}
     runs-on: ubuntu-latest
     environment: dev
     outputs:
-      REGISTRY:   ${{ steps.cfg.outputs.REGISTRY }}
+      REGISTRY: ${{ steps.cfg.outputs.REGISTRY }}
       IMAGE_REPO: ${{ steps.cfg.outputs.IMAGE_REPO }}
-      SHA:        ${{ steps.cfg.outputs.SHA }}
+      SHA: ${{ steps.cfg.outputs.SHA }}
     steps:
       - id: cfg
         shell: bash
@@ -43,29 +43,31 @@ jobs:
       resource_group: ITX-RG-01
       location: eastus
       aca_env: env-lab-aca
-      aca_be_name: be-dev              # <- requerido por el reusable
+      aca_be_name: be-dev
+
       registry_login_server: ${{ needs.dev-meta.outputs.REGISTRY }}
-      image_repo:           ${{ needs.dev-meta.outputs.IMAGE_REPO }}
-      sha:                  ${{ needs.dev-meta.outputs.SHA }}
+      image_repo: ${{ needs.dev-meta.outputs.IMAGE_REPO }}
+      sha: ${{ needs.dev-meta.outputs.SHA }}
+
       ingress: internal
       target_port: "8080"
       cpu: "0.25"
       memory: "0.5Gi"
       min_replicas: "1"
       max_replicas: "1"
-      app_env: dev                     # <- requerido por el reusable
+      app_env: dev
     secrets: inherit
 
-  # -------- QA --------
+# ---------- QA ----------
   qa-meta:
     name: Resolve env vars (QA)
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'staging' }}
     runs-on: ubuntu-latest
     environment: qa
     outputs:
-      REGISTRY:   ${{ steps.cfg.outputs.REGISTRY }}
+      REGISTRY: ${{ steps.cfg.outputs.REGISTRY }}
       IMAGE_REPO: ${{ steps.cfg.outputs.IMAGE_REPO }}
-      SHA:        ${{ steps.cfg.outputs.SHA }}
+      SHA: ${{ steps.cfg.outputs.SHA }}
     steps:
       - id: cfg
         shell: bash
@@ -86,9 +88,11 @@ jobs:
       location: eastus
       aca_env: env-lab-aca
       aca_be_name: be-qa
+
       registry_login_server: ${{ needs.qa-meta.outputs.REGISTRY }}
-      image_repo:           ${{ needs.qa-meta.outputs.IMAGE_REPO }}
-      sha:                  ${{ needs.qa-meta.outputs.SHA }}
+      image_repo: ${{ needs.qa-meta.outputs.IMAGE_REPO }}
+      sha: ${{ needs.qa-meta.outputs.SHA }}
+
       ingress: internal
       target_port: "8080"
       cpu: "0.25"
@@ -98,16 +102,16 @@ jobs:
       app_env: qa
     secrets: inherit
 
-  # -------- PRD --------
+# ---------- PRD ----------
   prd-meta:
     name: Resolve env vars (PRD)
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
     runs-on: ubuntu-latest
     environment: prd
     outputs:
-      REGISTRY:   ${{ steps.cfg.outputs.REGISTRY }}
+      REGISTRY: ${{ steps.cfg.outputs.REGISTRY }}
       IMAGE_REPO: ${{ steps.cfg.outputs.IMAGE_REPO }}
-      SHA:        ${{ steps.cfg.outputs.SHA }}
+      SHA: ${{ steps.cfg.outputs.SHA }}
     steps:
       - id: cfg
         shell: bash
@@ -128,9 +132,11 @@ jobs:
       location: eastus
       aca_env: env-lab-aca
       aca_be_name: be-prd
+
       registry_login_server: ${{ needs.prd-meta.outputs.REGISTRY }}
-      image_repo:           ${{ needs.prd-meta.outputs.IMAGE_REPO }}
-      sha:                  ${{ needs.prd-meta.outputs.SHA }}
+      image_repo: ${{ needs.prd-meta.outputs.IMAGE_REPO }}
+      sha: ${{ needs.prd-meta.outputs.SHA }}
+
       ingress: internal
       target_port: "8080"
       cpu: "0.25"
