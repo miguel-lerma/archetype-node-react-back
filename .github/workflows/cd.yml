@@ -13,8 +13,8 @@ concurrency:
   group: cd-be-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: true
 
-# ---------- DEV ----------
 jobs:
+  # ------------ DEV ------------
   dev-meta:
     name: Resolve env vars (DEV)
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'develop' }}
@@ -37,7 +37,7 @@ jobs:
     name: Deploy BE → DEV
     if: ${{ always() && needs.dev-meta.result == 'success' }}
     needs: [dev-meta]
-    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
+    uses: ./.github/workflows/deploy-aca.yml
     with:
       environment: dev
       resource_group: ITX-RG-01
@@ -58,7 +58,7 @@ jobs:
       app_env: dev
     secrets: inherit
 
-# ---------- QA ----------
+  # ------------ QA ------------
   qa-meta:
     name: Resolve env vars (QA)
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'staging' }}
@@ -81,7 +81,7 @@ jobs:
     name: Deploy BE → QA
     if: ${{ always() && needs.qa-meta.result == 'success' }}
     needs: [qa-meta]
-    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
+    uses: ./.github/workflows/deploy-aca.yml
     with:
       environment: qa
       resource_group: ITX-RG-01
@@ -102,7 +102,7 @@ jobs:
       app_env: qa
     secrets: inherit
 
-# ---------- PRD ----------
+  # ------------ PRD ------------
   prd-meta:
     name: Resolve env vars (PRD)
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
@@ -125,7 +125,7 @@ jobs:
     name: Deploy BE → PRD
     if: ${{ always() && needs.prd-meta.result == 'success' }}
     needs: [prd-meta]
-    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
+    uses: ./.github/workflows/deploy-aca.yml
     with:
       environment: prd
       resource_group: ITX-RG-01
