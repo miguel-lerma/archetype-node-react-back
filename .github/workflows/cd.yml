@@ -13,6 +13,11 @@ concurrency:
   group: cd-be-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: true
 
+<<<<<<< HEAD
+# ---------- DEV ----------
+=======
+# ---------------- DEV ----------------
+>>>>>>> 93e1ba7cfdd1295ad21a8edfa8a136f44771b1c7
 jobs:
   # ------------ DEV ------------
   dev-meta:
@@ -37,7 +42,7 @@ jobs:
     name: Deploy BE → DEV
     if: ${{ always() && needs.dev-meta.result == 'success' }}
     needs: [dev-meta]
-    uses: ./.github/workflows/deploy-aca.yml
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca-fe.yml@main
     with:
       environment: dev
       resource_group: ITX-RG-01
@@ -58,7 +63,11 @@ jobs:
       app_env: dev
     secrets: inherit
 
-  # ------------ QA ------------
+<<<<<<< HEAD
+# ---------- QA ----------
+=======
+# ---------------- QA ----------------
+>>>>>>> 93e1ba7cfdd1295ad21a8edfa8a136f44771b1c7
   qa-meta:
     name: Resolve env vars (QA)
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'staging' }}
@@ -81,7 +90,7 @@ jobs:
     name: Deploy BE → QA
     if: ${{ always() && needs.qa-meta.result == 'success' }}
     needs: [qa-meta]
-    uses: ./.github/workflows/deploy-aca.yml
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca-fe.yml@main
     with:
       environment: qa
       resource_group: ITX-RG-01
@@ -102,7 +111,11 @@ jobs:
       app_env: qa
     secrets: inherit
 
-  # ------------ PRD ------------
+<<<<<<< HEAD
+# ---------- PRD ----------
+=======
+# ---------------- PRD ----------------
+>>>>>>> 93e1ba7cfdd1295ad21a8edfa8a136f44771b1c7
   prd-meta:
     name: Resolve env vars (PRD)
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
@@ -125,7 +138,7 @@ jobs:
     name: Deploy BE → PRD
     if: ${{ always() && needs.prd-meta.result == 'success' }}
     needs: [prd-meta]
-    uses: ./.github/workflows/deploy-aca.yml
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca-fe.yml@main
     with:
       environment: prd
       resource_group: ITX-RG-01
