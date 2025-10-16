@@ -1,3 +1,3 @@
 # API Backend
 
-Node + Express, CD a ACA
+Node + Express, CD a ACA.
