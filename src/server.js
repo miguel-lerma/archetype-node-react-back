@@ -1,3 +1,4 @@
+// server.js
 import express from "express";
 import cors from "cors";
 import morgan from "morgan";
@@ -40,11 +41,7 @@ app.use(cors({
       ? allowList
       : (APP_ENV === "dev" ? ["http://localhost:5173"] : []);
 
-    const allowed = effectiveAllowList.some(allowedOrigin => {
-      // Coincidencia exacta; si quieres soportar subdominios, aquí puedes
-      // agregar lógica con RegExp.
-      return origin === allowedOrigin;
-    });
+    const allowed = effectiveAllowList.some(allowedOrigin => origin === allowedOrigin);
 
     if (allowed) return callback(null, true);
     return callback(new Error(`CORS blocked: origin ${origin} is not allowed`));
@@ -57,6 +54,24 @@ app.use(cors({
 
 // Preflight rápido
 app.options("*", (_req, res) => res.sendStatus(204));
+
+// === Endpoints de salud (RAÍZ, sin /api) ===
+// Nginx en el FE hará strip de /api, por lo que /api/healthz -> /healthz aquí.
+app.get("/healthz", (_req, res) => {
+  res.type("text/plain").send("ok");
+});
+app.get("/readyz", (_req, res) => {
+  res.type("text/plain").send("ready");
+});
+app.get("/livez", (_req, res) => {
+  res.type("text/plain").send("live");
+});
+
+// (Compatibilidad) Deja /api/health por si algo externo aún lo llama.
+// OJO: en no-dev, /api/* pasa por afdGuard (ver más abajo).
+app.get("/api/health", (_req, res) => {
+  res.json({ status: "ok", env: APP_ENV, time: new Date().toISOString() });
+});
 
 // === Middleware: exigir header secreto de Front Door (no en dev) ===
 function afdGuard(req, res, next) {
@@ -77,17 +92,13 @@ function afdGuard(req, res, next) {
   });
 }
 
-// Aplica a toda la API (puedes moverlo a rutas específicas si prefieres)
+// Aplica a toda la API de negocio (NO a /healthz|/readyz|/livez)
 app.use("/api", afdGuard);
 
 // === Endpoints demo ===
 let messages = [
   { id: 1, author: "Sistema", text: "¡Bienvenido a la API dummy!", ts: new Date().toISOString() }
 ];
-
-app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", env: APP_ENV, time: new Date().toISOString() });
-});
 
 app.get("/api/messages", (_req, res) => {
   res.json({ items: messages });
