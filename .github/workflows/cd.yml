@@ -37,7 +37,7 @@ jobs:
     name: Deploy BE → DEV
     if: ${{ always() && needs.dev-meta.result == 'success' }}
     needs: [dev-meta]
-    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca-be.yml@main
     with:
       environment: dev
       resource_group: ITX-RG-01
@@ -81,7 +81,7 @@ jobs:
     name: Deploy BE → QA
     if: ${{ always() && needs.qa-meta.result == 'success' }}
     needs: [qa-meta]
-    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca-be.yml@main
     with:
       environment: qa
       resource_group: ITX-RG-01
@@ -125,7 +125,7 @@ jobs:
     name: Deploy BE → PRD
     if: ${{ always() && needs.prd-meta.result == 'success' }}
     needs: [prd-meta]
-    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca.yml@main
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca-be.yml@main
     with:
       environment: prd
       resource_group: ITX-RG-01
