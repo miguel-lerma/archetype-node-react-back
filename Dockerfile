@@ -1,8 +1,8 @@
-FROM node:20-alpine
+FROM node:20-alpine as runtime
 WORKDIR /app
-ENV NODE_ENV=production
 COPY package*.json ./
-RUN npm ci --omit=dev
-COPY src ./src
+RUN npm ci || npm i
+COPY . .
+ENV NODE_ENV=production
 EXPOSE 8080
-CMD ["node", "src/server.js"]
+CMD ["npm", "start"]
