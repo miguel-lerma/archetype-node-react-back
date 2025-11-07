@@ -13,7 +13,7 @@ concurrency:
   group: cd-be-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: true
 
-# -------- DEV --------
+# ========== DEV ==========
 jobs:
   dev-meta:
     name: Resolve env vars (DEV)
@@ -35,10 +35,46 @@ jobs:
           echo "IMAGE_REPO=archetype-back" >> "$GITHUB_OUTPUT"
           echo "SHA=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
 
+  dev-secrets:
+    name: Load secrets for DEV
+    if: ${{ github.event.workflow_run.conclusion == 'success'
+            && github.event.workflow_run.head_branch == 'develop'
+            && github.event.workflow_run.event == 'push' }}
+    runs-on: ubuntu-latest
+    environment: dev
+    outputs:
+      kv_refs: ${{ steps.load.outputs.kv_refs }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Load secrets mapping
+        id: load
+        shell: bash
+        run: |
+          set -euo pipefail
+          
+          SECRETS_FILE="ops/secrets.env"
+          
+          # Si no existe el archivo, no hay secretos
+          if [[ ! -f "$SECRETS_FILE" ]]; then
+            echo "ℹ️ No se encontró $SECRETS_FILE, sin secretos de Key Vault"
+            echo "kv_refs=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          
+          # Leer archivo, ignorar comentarios (#) y líneas vacías
+          KV_REFS=$(grep -v '^#' "$SECRETS_FILE" | grep -v '^[[:space:]]*$' | tr '\n' ' ')
+          
+          echo "kv_refs=${KV_REFS}" >> "$GITHUB_OUTPUT"
+          
+          # Log para debugging
+          echo "📋 Secretos detectados para DEV:"
+          echo "$KV_REFS" | tr ' ' '\n'
+
   deploy-dev:
     name: Deploy BE → DEV
     if: ${{ always() && needs.dev-meta.result == 'success' }}
-    needs: [dev-meta]
+    needs: [dev-meta, dev-secrets]
     uses: miguel-lerma/pipelines/.github/workflows/deploy-aca-be.yml@main
     with:
       environment: dev
@@ -58,9 +94,17 @@ jobs:
       min_replicas: "1"
       max_replicas: "1"
       app_env: dev
+      
+      # 🔐 Key Vault integration
+      enable_kv: true
+      kv_name: itxzakvlab01
+      kv_resource_group: ITX-RG-01
+      kv_required: false
+      kv_secret_refs: ${{ needs.dev-secrets.outputs.kv_refs }}
+    
     secrets: inherit
 
-# -------- QA --------
+# ========== QA ==========
   qa-meta:
     name: Resolve env vars (QA)
     if: ${{ github.event.workflow_run.conclusion == 'success'
@@ -81,10 +125,43 @@ jobs:
           echo "IMAGE_REPO=archetype-back" >> "$GITHUB_OUTPUT"
           echo "SHA=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
 
+  qa-secrets:
+    name: Load secrets for QA
+    if: ${{ github.event.workflow_run.conclusion == 'success'
+            && github.event.workflow_run.head_branch == 'staging'
+            && github.event.workflow_run.event == 'push' }}
+    runs-on: ubuntu-latest
+    environment: qa
+    outputs:
+      kv_refs: ${{ steps.load.outputs.kv_refs }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Load secrets mapping
+        id: load
+        shell: bash
+        run: |
+          set -euo pipefail
+          
+          SECRETS_FILE="ops/secrets.env"
+          
+          if [[ ! -f "$SECRETS_FILE" ]]; then
+            echo "ℹ️ No se encontró $SECRETS_FILE, sin secretos de Key Vault"
+            echo "kv_refs=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          
+          KV_REFS=$(grep -v '^#' "$SECRETS_FILE" | grep -v '^[[:space:]]*$' | tr '\n' ' ')
+          
+          echo "kv_refs=${KV_REFS}" >> "$GITHUB_OUTPUT"
+          
+          echo "📋 Secretos detectados para QA:"
+          echo "$KV_REFS" | tr ' ' '\n'
+
   deploy-qa:
     name: Deploy BE → QA
     if: ${{ always() && needs.qa-meta.result == 'success' }}
-    needs: [qa-meta]
+    needs: [qa-meta, qa-secrets]
     uses: miguel-lerma/pipelines/.github/workflows/deploy-aca-be.yml@main
     with:
       environment: qa
@@ -104,9 +181,17 @@ jobs:
       min_replicas: "1"
       max_replicas: "1"
       app_env: qa
+      
+      # 🔐 Key Vault integration
+      enable_kv: true
+      kv_name: itxzakvlab01
+      kv_resource_group: ITX-RG-01
+      kv_required: true
+      kv_secret_refs: ${{ needs.qa-secrets.outputs.kv_refs }}
+    
     secrets: inherit
 
-# -------- PRD --------
+# ========== PRD ==========
   prd-meta:
     name: Resolve env vars (PRD)
     if: ${{ github.event.workflow_run.conclusion == 'success'
@@ -127,10 +212,43 @@ jobs:
           echo "IMAGE_REPO=archetype-back" >> "$GITHUB_OUTPUT"
           echo "SHA=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
 
+  prd-secrets:
+    name: Load secrets for PRD
+    if: ${{ github.event.workflow_run.conclusion == 'success'
+            && github.event.workflow_run.head_branch == 'main'
+            && github.event.workflow_run.event == 'push' }}
+    runs-on: ubuntu-latest
+    environment: prd
+    outputs:
+      kv_refs: ${{ steps.load.outputs.kv_refs }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Load secrets mapping
+        id: load
+        shell: bash
+        run: |
+          set -euo pipefail
+          
+          SECRETS_FILE="ops/secrets.env"
+          
+          if [[ ! -f "$SECRETS_FILE" ]]; then
+            echo "ℹ️ No se encontró $SECRETS_FILE, sin secretos de Key Vault"
+            echo "kv_refs=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          
+          KV_REFS=$(grep -v '^#' "$SECRETS_FILE" | grep -v '^[[:space:]]*$' | tr '\n' ' ')
+          
+          echo "kv_refs=${KV_REFS}" >> "$GITHUB_OUTPUT"
+          
+          echo "📋 Secretos detectados para PRD:"
+          echo "$KV_REFS" | tr ' ' '\n'
+
   deploy-prd:
     name: Deploy BE → PRD
     if: ${{ always() && needs.prd-meta.result == 'success' }}
-    needs: [prd-meta]
+    needs: [prd-meta, prd-secrets]
     uses: miguel-lerma/pipelines/.github/workflows/deploy-aca-be.yml@main
     with:
       environment: prd
@@ -150,4 +268,12 @@ jobs:
       min_replicas: "1"
       max_replicas: "2"
       app_env: production
+      
+      # 🔐 Key Vault integration
+      enable_kv: true
+      kv_name: itxzakvlab01
+      kv_resource_group: ITX-RG-01
+      kv_required: true
+      kv_secret_refs: ${{ needs.prd-secrets.outputs.kv_refs }}
+    
     secrets: inherit
