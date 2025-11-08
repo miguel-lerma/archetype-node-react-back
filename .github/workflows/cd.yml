@@ -1,469 +1,320 @@
 ---
-name: CD - Deploy Backend to Azure Container Apps (Reusable)
+name: CD - Backend (caller)
 
 on:
-  workflow_call:
+  workflow_run:
+    workflows: ["CI - Build & Push Image"]
+    types: [completed]
+  workflow_dispatch:  # Permite ejecución manual
     inputs:
       environment:
-        description: "dev | qa | prd"
+        description: 'Target environment'
         required: true
-        type: string
-      resource_group:
-        required: true
-        type: string
-      location:
-        required: true
-        type: string
-      aca_env:
-        required: true
-        type: string
-      aca_be_name:
-        required: true
-        type: string
-      registry_login_server:
-        description: "p.ej. itxzacrlab01.azurecr.io"
-        required: true
-        type: string
-      image_repo:
-        description: "repo de imagen en ACR, p.ej. archetype-back"
-        required: true
-        type: string
-      sha:
-        description: "sha del commit: <40 hex> (se usa como tag sha-<40>)"
-        required: true
-        type: string
-      ingress:
-        description: "internal recomendado para BE"
-        default: internal
-        type: string
-      target_port:
-        default: "8080"
-        type: string
-      cpu:
-        default: "0.25"
-        type: string
-      memory:
-        default: "0.5Gi"
-        type: string
-      min_replicas:
-        default: "1"
-        type: string
-      max_replicas:
-        default: "1"
-        type: string
-      app_env:
-        description: "APP_ENV para BE (dev|qa|production)"
-        required: true
-        type: string
-
-      # ========== Key Vault Integration (OPCIONAL) ==========
-      enable_kv:
-        description: "Enable Key Vault secret injection"
-        type: boolean
-        default: false
-        required: false
-      kv_name:
-        description: "Key Vault name (ej: itxzakvlab01)"
-        type: string
-        default: ""
-        required: false
-      kv_resource_group:
-        description: "RG del Key Vault (si difiere del app, usa el mismo por default)"
-        type: string
-        default: ""
-        required: false
-      kv_required:
-        description: "Fail si falta secreto en KV (true=PRD, false=DEV)"
-        type: boolean
-        default: true
-        required: false
-      kv_secret_refs:
-        description: "Space-separated ENV=secret pairs (ej: 'DB_URL=db-url DB_PASS=db-password')"
-        type: string
-        default: ""
-        required: false
+        type: choice
+        options:
+          - dev
+          - qa
+          - prd
 
 permissions:
   id-token: write
   contents: read
 
 concurrency:
-  group: cd-be-${{ inputs.environment }}-${{ inputs.sha }}
+  group: cd-be-${{ github.ref }}
   cancel-in-progress: true
 
+# ========== DEV ==========
 jobs:
-  deploy:
-    name: Deploy BE → ${{ inputs.environment }}
+  dev-meta:
+    name: Resolve env vars (DEV)
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'dev') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'develop' &&
+       github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
+    environment: dev
+    outputs:
+      REGISTRY: ${{ steps.cfg.outputs.REGISTRY }}
+      IMAGE_REPO: ${{ steps.cfg.outputs.IMAGE_REPO }}
+      SHA: ${{ steps.cfg.outputs.SHA }}
+    steps:
+      - id: cfg
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "REGISTRY=${{ vars.ACR_LOGIN_SERVER }}" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_REPO=archetype-back" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "SHA=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "SHA=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+          fi
 
+  dev-secrets:
+    name: Load secrets for DEV
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'dev') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'develop' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    environment: dev
+    outputs:
+      kv_refs: ${{ steps.load.outputs.kv_refs }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-          environment: azurecloud
-          allow-no-subscriptions: false
-          audience: api://AzureADTokenExchange
-
-      - name: Meta (image ref / ACR name)
-        id: meta
+      - name: Load secrets mapping
+        id: load
         shell: bash
         run: |
           set -euo pipefail
-          REGISTRY="${{ inputs.registry_login_server }}"
-          IMAGE_REPO="${{ inputs.image_repo }}"
-          SHA="${{ inputs.sha }}"
-          IMAGE_REF="${REGISTRY}/${IMAGE_REPO}:sha-${SHA}"
-          ACR_NAME="${REGISTRY%%.azurecr.io}"
-          {
-            echo "REGISTRY=${REGISTRY}"
-            echo "IMAGE_REF=${IMAGE_REF}"
-            echo "ACR_NAME=${ACR_NAME}"
-          } >> "$GITHUB_OUTPUT"
 
-      - name: Ensure containerapp extension
-        uses: azure/CLI@v2
-        with:
-          inlineScript: az extension add -n containerapp --upgrade || true
+          SECRETS_FILE="ops/secrets.env"
 
-      - name: Preflight (RG / Env)
-        shell: bash
-        run: |
-          set -euo pipefail
-          az group show -n "${{ inputs.resource_group }}" -o none
-          az containerapp env show -g "${{ inputs.resource_group }}" -n "${{ inputs.aca_env }}" -o none || \
-          az containerapp env create -g "${{ inputs.resource_group }}" -n "${{ inputs.aca_env }}" -l "${{ inputs.location }}" -o none
-
-      - name: Ensure MI + AcrPull + Registry binding (si existe el app)
-        shell: bash
-        run: |
-          set -euo pipefail
-          RG="${{ inputs.resource_group }}"
-          APP="${{ inputs.aca_be_name }}"
-          ACR_NAME="${{ steps.meta.outputs.ACR_NAME }}"
-          ACR_ID="$(az acr show -n "$ACR_NAME" -g "$RG" --query id -o tsv)"
-
-          if az containerapp show -g "$RG" -n "$APP" >/dev/null 2>&1; then
-            MI="$(az containerapp show -g "$RG" -n "$APP" --query "identity.principalId" -o tsv)"
-            if [[ -z "$MI" || "$MI" == "None" ]]; then
-              az containerapp identity assign -g "$RG" -n "$APP" --system-assigned -o none
-              MI="$(az containerapp show -g "$RG" -n "$APP" --query "identity.principalId" -o tsv)"
-            fi
-
-            HAS_ROLE="$(az role assignment list --assignee "$MI" --role "AcrPull" --scope "$ACR_ID" --query "length(@)" -o tsv)"
-            if [[ "$HAS_ROLE" == "0" ]]; then
-              az role assignment create --assignee "$MI" --role "AcrPull" --scope "$ACR_ID" -o none
-            fi
-
-            az containerapp registry set \
-              -g "$RG" -n "$APP" \
-              --server "${{ steps.meta.outputs.REGISTRY }}" \
-              --identity system -o none || true
-          fi
-
-      # ========== NUEVO STEP: Key Vault Integration ==========
-      - name: Configure Key Vault Secrets
-        if: ${{ inputs.enable_kv == true }}
-        shell: bash
-        env:
-          KV_NAME: ${{ inputs.kv_name }}
-          KV_RG: ${{ inputs.kv_resource_group }}
-          KV_REQUIRED: ${{ inputs.kv_required }}
-          KV_SECRET_REFS: ${{ inputs.kv_secret_refs }}
-          RG: ${{ inputs.resource_group }}
-          APP: ${{ inputs.aca_be_name }}
-        run: |
-          set -euo pipefail
-
-          # Validaciones básicas
-          if [[ -z "$KV_NAME" ]]; then
-            echo "⚠️ enable_kv=true pero kv_name está vacío, skipping KV setup"
-            echo "KV_SECRETS_ARGS=" >> "$GITHUB_ENV"
-            echo "SECRET_ENV_REFS=" >> "$GITHUB_ENV"
+          # Si no existe el archivo, no hay secretos
+          if [[ ! -f "$SECRETS_FILE" ]]; then
+            echo "ℹ️ No se encontró $SECRETS_FILE, sin secretos de Key Vault"
+            echo "kv_refs=" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          if [[ -z "$KV_SECRET_REFS" ]]; then
-            echo "ℹ️ No hay secretos para inyectar (kv_secret_refs vacío)"
-            echo "KV_SECRETS_ARGS=" >> "$GITHUB_ENV"
-            echo "SECRET_ENV_REFS=" >> "$GITHUB_ENV"
-            exit 0
-          fi
+          # Leer archivo, ignorar comentarios (#) y líneas vacías
+          KV_REFS=$(grep -v '^#' "$SECRETS_FILE" | grep -v '^[[:space:]]*$' | tr '\n' ' ')
 
-          # Usar mismo RG si no se especifica otro
-          if [[ -z "$KV_RG" ]]; then
-            KV_RG="$RG"
-          fi
+          echo "kv_refs=${KV_REFS}" >> "$GITHUB_OUTPUT"
 
-          echo "🔐 Configurando Key Vault: $KV_NAME"
+          # Log para debugging
+          echo "📋 Secretos detectados para DEV:"
+          echo "$KV_REFS" | tr ' ' '\n'
 
-          # 1. Verificar si el app existe
-          if ! az containerapp show -g "$RG" -n "$APP" >/dev/null 2>&1; then
-            echo "ℹ️ App '$APP' no existe aún, se configurará KV después del create"
-            echo "KV_SECRETS_ARGS=" >> "$GITHUB_ENV"
-            echo "SECRET_ENV_REFS=" >> "$GITHUB_ENV"
-            exit 0
-          fi
+  deploy-dev:
+    name: Deploy BE → DEV
+    if: ${{ always() && needs.dev-meta.result == 'success' }}
+    needs: [dev-meta, dev-secrets]
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca-be.yml@main
+    with:
+      environment: dev
+      resource_group: ITX-RG-01
+      location: eastus
+      aca_env: env-lab-aca
+      aca_be_name: be-dev
 
-          # 2. Asegurar Managed Identity
-          echo "Verificando Managed Identity..."
-          MI=$(az containerapp show -g "$RG" -n "$APP" \
-            --query "identity.principalId" -o tsv 2>/dev/null || echo "")
+      registry_login_server: ${{ needs.dev-meta.outputs.REGISTRY }}
+      image_repo: ${{ needs.dev-meta.outputs.IMAGE_REPO }}
+      sha: ${{ needs.dev-meta.outputs.SHA }}
 
-          if [[ -z "$MI" || "$MI" == "None" ]]; then
-            echo "Asignando System-Assigned Managed Identity..."
-            az containerapp identity assign -g "$RG" -n "$APP" --system-assigned -o none
-            sleep 5
-            MI=$(az containerapp show -g "$RG" -n "$APP" \
-              --query "identity.principalId" -o tsv)
-          fi
+      ingress: internal
+      target_port: "8080"
+      cpu: "0.25"
+      memory: "0.5Gi"
+      min_replicas: "1"
+      max_replicas: "1"
+      app_env: dev
 
-          echo "✅ Managed Identity: $MI"
+      # 🔐 Key Vault integration
+      enable_kv: true
+      kv_name: itxzakvlab01
+      kv_resource_group: ITX-RG-01
+      kv_required: false
+      kv_secret_refs: ${{ needs.dev-secrets.outputs.kv_refs }}
 
-          # 3. Verificar rol Key Vault Secrets User
-          echo "Verificando permisos sobre Key Vault..."
-          KV_ID=$(az keyvault show -n "$KV_NAME" -g "$KV_RG" --query id -o tsv)
+    secrets: inherit
 
-          HAS_ROLE=$(az role assignment list \
-            --assignee "$MI" \
-            --role "Key Vault Secrets User" \
-            --scope "$KV_ID" \
-            --query "length(@)" -o tsv 2>/dev/null || echo "0")
-
-          if [[ "$HAS_ROLE" == "0" ]]; then
-            echo "⚠️ Managed Identity no tiene rol 'Key Vault Secrets User'"
-            echo "Por favor, asigna manualmente el rol:"
-            echo "  az role assignment create --role 'Key Vault Secrets User' \\"
-            echo "    --assignee-object-id $MI --assignee-principal-type ServicePrincipal \\"
-            echo "    --scope $KV_ID"
-            if [[ "$KV_REQUIRED" == "true" ]]; then
-              exit 1
-            else
-              echo "KV_SECRETS_ARGS=" >> "$GITHUB_ENV"
-              echo "SECRET_ENV_REFS=" >> "$GITHUB_ENV"
-              exit 0
-            fi
+# ========== QA ==========
+  qa-meta:
+    name: Resolve env vars (QA)
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'qa') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'staging' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    environment: qa
+    outputs:
+      REGISTRY: ${{ steps.cfg.outputs.REGISTRY }}
+      IMAGE_REPO: ${{ steps.cfg.outputs.IMAGE_REPO }}
+      SHA: ${{ steps.cfg.outputs.SHA }}
+    steps:
+      - id: cfg
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "REGISTRY=${{ vars.ACR_LOGIN_SERVER }}" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_REPO=archetype-back" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "SHA=${{ github.sha }}" >> "$GITHUB_OUTPUT"
           else
-            echo "✅ Rol ya existe"
+            echo "SHA=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
           fi
 
-          # 4. Construir secretos de KV y env vars
-          echo "Procesando secretos..."
-          KV_SECRETS_ARGS=""
-          SECRET_ENV_REFS=""
+  qa-secrets:
+    name: Load secrets for QA
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'qa') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'staging' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    environment: qa
+    outputs:
+      kv_refs: ${{ steps.load.outputs.kv_refs }}
+    steps:
+      - uses: actions/checkout@v4
 
-          for pair in $KV_SECRET_REFS; do
-            if [[ ! "$pair" =~ ^[A-Z_]+=[a-z0-9-]+$ ]]; then
-              echo "⚠️ Formato inválido: '$pair' (ignorando)"
-              continue
-            fi
-
-            ENV_VAR="${pair%%=*}"
-            SECRET_NAME="${pair##*=}"
-
-            # Verificar que el secreto existe en Key Vault
-            if az keyvault secret show \
-              --vault-name "$KV_NAME" \
-              --name "$SECRET_NAME" \
-              --query "id" -o tsv >/dev/null 2>&1; then
-
-              echo "  ✅ $ENV_VAR → secretref:$SECRET_NAME"
-
-              # Construir argumentos para az containerapp secret set
-              KV_SECRETS_ARGS="${KV_SECRETS_ARGS} ${SECRET_NAME}=keyvaultref:https://${KV_NAME}.vault.azure.net/secrets/${SECRET_NAME},identityref:system"
-
-              # Construir env vars que referencian los secretos
-              SECRET_ENV_REFS="${SECRET_ENV_REFS} ${ENV_VAR}=secretref:${SECRET_NAME}"
-            else
-              MSG="Secret '$SECRET_NAME' no existe en Key Vault '$KV_NAME'"
-
-              if [[ "$KV_REQUIRED" == "true" ]]; then
-                echo "  ❌ ERROR: $MSG"
-                exit 1
-              else
-                echo "  ⚠️ WARNING: $MSG (soft-fail)"
-              fi
-            fi
-          done
-
-          # Guardar para usar en siguiente step
-          {
-            echo "KV_SECRETS_ARGS<<EOF"
-            echo "$KV_SECRETS_ARGS"
-            echo "EOF"
-            echo "SECRET_ENV_REFS<<EOF"
-            echo "$SECRET_ENV_REFS"
-            echo "EOF"
-          } >> "$GITHUB_ENV"
-
-          echo "✅ Key Vault configurado correctamente"
-
-      - name: Register KV Secrets in Container App
-        if: ${{ inputs.enable_kv == true }}
-        shell: bash
-        env:
-          RG: ${{ inputs.resource_group }}
-          APP: ${{ inputs.aca_be_name }}
-        run: |
-          set -euo pipefail
-
-          if [[ -z "${KV_SECRETS_ARGS:-}" ]]; then
-            echo "ℹ️ No hay secretos de KV para registrar"
-            exit 0
-          fi
-
-          if ! az containerapp show -g "$RG" -n "$APP" >/dev/null 2>&1; then
-            echo "ℹ️ App no existe aún, se registrarán secretos después del create"
-            exit 0
-          fi
-
-          echo "📦 Registrando secretos de Key Vault en Container App..."
-
-          # Registrar secretos (az containerapp secret set)
-          eval "az containerapp secret set -g \"$RG\" -n \"$APP\" --secrets $KV_SECRETS_ARGS"
-
-          echo "✅ Secretos registrados"
-
-      - name: Create/Update BE (ACA)
-        env:
-          IMG: ${{ steps.meta.outputs.IMAGE_REF }}
-          RG: ${{ inputs.resource_group }}
-          ACA_ENV: ${{ inputs.aca_env }}
-          APP: ${{ inputs.aca_be_name }}
-          INGRESS: ${{ inputs.ingress }}
-          TARGET_PORT: ${{ inputs.target_port }}
-          CPU: ${{ inputs.cpu }}
-          MEM: ${{ inputs.memory }}
-          MIN: ${{ inputs.min_replicas }}
-          MAX: ${{ inputs.max_replicas }}
-          APP_ENV: ${{ inputs.app_env }}
+      - name: Load secrets mapping
+        id: load
         shell: bash
         run: |
           set -euo pipefail
 
-          # Construir env vars básicas como array
-          ENV_VARS_ARRAY=(
-            "APP_ENV=${APP_ENV}"
-            "PORT=${TARGET_PORT}"
-            "NODE_ENV=production"
-            "LOG_LEVEL=info"
-          )
+          SECRETS_FILE="ops/secrets.env"
 
-          # Agregar secret refs de KV si existen
-          if [[ -n "${SECRET_ENV_REFS:-}" ]]; then
-            echo "📦 Agregando secretos de Key Vault..."
-            for ref in $SECRET_ENV_REFS; do
-              ENV_VARS_ARRAY+=("$ref")
-            done
+          if [[ ! -f "$SECRETS_FILE" ]]; then
+            echo "ℹ️ No se encontró $SECRETS_FILE, sin secretos de Key Vault"
+            echo "kv_refs=" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-          if ! az containerapp show -g "$RG" -n "$APP" >/dev/null 2>&1; then
-            echo "🆕 Creando Container App..."
-            az containerapp create \
-              -g "$RG" -n "$APP" \
-              --environment "$ACA_ENV" \
-              --image "$IMG" \
-              --ingress "$INGRESS" --target-port "$TARGET_PORT" \
-              --registry-server "${{ steps.meta.outputs.REGISTRY }}" \
-              --registry-identity system \
-              --system-assigned \
-              --cpu "$CPU" --memory "$MEM" \
-              --min-replicas "$MIN" --max-replicas "$MAX" \
-              --env-vars "${ENV_VARS_ARRAY[@]}"
+          KV_REFS=$(grep -v '^#' "$SECRETS_FILE" | grep -v '^[[:space:]]*$' | tr '\n' ' ')
+
+          echo "kv_refs=${KV_REFS}" >> "$GITHUB_OUTPUT"
+
+          echo "📋 Secretos detectados para QA:"
+          echo "$KV_REFS" | tr ' ' '\n'
+
+  deploy-qa:
+    name: Deploy BE → QA
+    if: ${{ always() && needs.qa-meta.result == 'success' }}
+    needs: [qa-meta, qa-secrets]
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca-be.yml@main
+    with:
+      environment: qa
+      resource_group: ITX-RG-01
+      location: eastus
+      aca_env: env-lab-aca
+      aca_be_name: be-qa
+
+      registry_login_server: ${{ needs.qa-meta.outputs.REGISTRY }}
+      image_repo: ${{ needs.qa-meta.outputs.IMAGE_REPO }}
+      sha: ${{ needs.qa-meta.outputs.SHA }}
+
+      ingress: internal
+      target_port: "8080"
+      cpu: "0.25"
+      memory: "0.5Gi"
+      min_replicas: "1"
+      max_replicas: "1"
+      app_env: qa
+
+      # 🔐 Key Vault integration
+      enable_kv: true
+      kv_name: itxzakvlab01
+      kv_resource_group: ITX-RG-01
+      kv_required: true
+      kv_secret_refs: ${{ needs.qa-secrets.outputs.kv_refs }}
+
+    secrets: inherit
+
+# ========== PRD ==========
+  prd-meta:
+    name: Resolve env vars (PRD)
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prd') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    environment: prd
+    outputs:
+      REGISTRY: ${{ steps.cfg.outputs.REGISTRY }}
+      IMAGE_REPO: ${{ steps.cfg.outputs.IMAGE_REPO }}
+      SHA: ${{ steps.cfg.outputs.SHA }}
+    steps:
+      - id: cfg
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "REGISTRY=${{ vars.ACR_LOGIN_SERVER }}" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_REPO=archetype-back" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "SHA=${{ github.sha }}" >> "$GITHUB_OUTPUT"
           else
-            echo "🔄 Actualizando Container App..."
-            az containerapp update \
-              -g "$RG" -n "$APP" \
-              --image "$IMG" \
-              --cpu "$CPU" --memory "$MEM" \
-              --min-replicas "$MIN" --max-replicas "$MAX" \
-              --set-env-vars "${ENV_VARS_ARRAY[@]}"
+            echo "SHA=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: BE internal FQDN (verificación)
+  prd-secrets:
+    name: Load secrets for PRD
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prd') ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    environment: prd
+    outputs:
+      kv_refs: ${{ steps.load.outputs.kv_refs }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load secrets mapping
+        id: load
         shell: bash
         run: |
           set -euo pipefail
-          echo "FQDN interno del BE:"
-          az containerapp show \
-            -g "${{ inputs.resource_group }}" \
-            -n "${{ inputs.aca_be_name }}" \
-            --query "properties.configuration.ingress.fqdn" -o tsv
 
-      - name: "Post-Deploy Sanity (config efectiva)"
-        shell: bash
-        env:
-          RG: ${{ inputs.resource_group }}
-          APP: ${{ inputs.aca_be_name }}
-          EXP_CPU: ${{ inputs.cpu }}
-          EXP_MEM: ${{ inputs.memory }}
-          EXP_MIN: ${{ inputs.min_replicas }}
-          EXP_MAX: ${{ inputs.max_replicas }}
-          EXP_PORT: ${{ inputs.target_port }}
-          EXP_INGRESS: ${{ inputs.ingress }}
-          EXP_APP_ENV: ${{ inputs.app_env }}
-          ENVIRONMENT: ${{ inputs.environment }}
-        run: |
-          set -euo pipefail
+          SECRETS_FILE="ops/secrets.env"
 
-          if [[ "$ENVIRONMENT" == "dev" ]]; then SOFT_FAIL=1; else SOFT_FAIL=0; fi
-          fail_or_warn() {
-            if [[ "$SOFT_FAIL" -eq 1 ]]; then
-              echo "::warning::$1"
-            else
-              echo "$1"
-              exit 1
-            fi
-          }
-          assert_eq() {
-            local exp="$1" act="$2" label="$3"
-            if [[ "$exp" != "$act" ]]; then
-              fail_or_warn "Mismatch $label: expected '$exp', got '$act'"
-            fi
-          }
-
-          cpu="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.containers[0].resources.cpu" -o tsv)"
-          mem="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.containers[0].resources.memory" -o tsv)"
-          min="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.scale.minReplicas" -o tsv || true)"
-          max="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.scale.maxReplicas" -o tsv || true)"
-          if [[ -z "$min" ]]; then
-            min="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.minReplicas" -o tsv || true)"
+          if [[ ! -f "$SECRETS_FILE" ]]; then
+            echo "ℹ️ No se encontró $SECRETS_FILE, sin secretos de Key Vault"
+            echo "kv_refs=" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-          if [[ -z "$max" ]]; then
-            max="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.maxReplicas" -o tsv || true)"
-          fi
-          port="$(az containerapp show -g "$RG" -n "$APP" --query "properties.configuration.ingress.targetPort" -o tsv)"
-          ext="$(az containerapp show -g "$RG" -n "$APP" --query "properties.configuration.ingress.external" -o tsv)"
-          rev="$(az containerapp show -g "$RG" -n "$APP" --query "properties.configuration.activeRevisionsMode" -o tsv)"
-          app_env="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.containers[0].env[?name=='APP_ENV'].value" -o tsv)"
-          port_env="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.containers[0].env[?name=='PORT'].value" -o tsv)"
 
-          if [[ "$EXP_INGRESS" == "external" ]]; then exp_ingress_bool="true"; else exp_ingress_bool="false"; fi
+          KV_REFS=$(grep -v '^#' "$SECRETS_FILE" | grep -v '^[[:space:]]*$' | tr '\n' ' ')
 
-          {
-            echo "### BE $APP – Config efectiva"
-            echo "- CPU: $cpu"
-            echo "- Mem: $mem"
-            echo "- Min/Max: $min/$max"
-            echo "- Ingress externo: $ext (esperado: $exp_ingress_bool)"
-            echo "- Target port: $port (esperado: $EXP_PORT)"
-            echo "- Revision mode: $rev"
-            echo "- APP_ENV env: $app_env (esperado: $EXP_APP_ENV)"
-            echo "- PORT env: $port_env (esperado: $EXP_PORT)"
-          } >> "$GITHUB_STEP_SUMMARY"
+          echo "kv_refs=${KV_REFS}" >> "$GITHUB_OUTPUT"
 
-          assert_eq "$EXP_CPU" "$cpu" "CPU"
-          assert_eq "$EXP_MEM" "$mem" "memory"
-          assert_eq "$EXP_MIN" "$min" "min replicas"
-          assert_eq "$EXP_MAX" "$max" "max replicas"
-          assert_eq "$EXP_PORT" "$port" "target port"
-          assert_eq "$exp_ingress_bool" "$ext" "ingress external/internal"
-          assert_eq "$EXP_APP_ENV" "$app_env" "APP_ENV"
-          assert_eq "$EXP_PORT" "$port_env" "PORT env"
+          echo "📋 Secretos detectados para PRD:"
+          echo "$KV_REFS" | tr ' ' '\n'
 
-          echo "✅ BE sanity OK (soft-fail=$SOFT_FAIL)"
+  deploy-prd:
+    name: Deploy BE → PRD
+    if: ${{ always() && needs.prd-meta.result == 'success' }}
+    needs: [prd-meta, prd-secrets]
+    uses: miguel-lerma/pipelines/.github/workflows/deploy-aca-be.yml@main
+    with:
+      environment: prd
+      resource_group: ITX-RG-01
+      location: eastus
+      aca_env: env-lab-aca
+      aca_be_name: be-prd
+
+      registry_login_server: ${{ needs.prd-meta.outputs.REGISTRY }}
+      image_repo: ${{ needs.prd-meta.outputs.IMAGE_REPO }}
+      sha: ${{ needs.prd-meta.outputs.SHA }}
+
+      ingress: internal
+      target_port: "8080"
+      cpu: "0.25"
+      memory: "0.5Gi"
+      min_replicas: "1"
+      max_replicas: "2"
+      app_env: production
+
+      # 🔐 Key Vault integration
+      enable_kv: true
+      kv_name: itxzakvlab01
+      kv_resource_group: ITX-RG-01
+      kv_required: true
+      kv_secret_refs: ${{ needs.prd-secrets.outputs.kv_refs }}
+
+    secrets: inherit

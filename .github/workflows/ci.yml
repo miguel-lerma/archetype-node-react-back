@@ -6,6 +6,7 @@ on:
     branches: ['develop', 'staging', 'main']
   pull_request:
     branches: ['develop', 'staging', 'main']
+  workflow_dispatch:  # Permite ejecución manual
 
 permissions:
   id-token: write
@@ -52,7 +53,7 @@ jobs:
 
   push-acr-dev:
     name: Push image to ACR (develop → DEV)
-    if: ${{ github.ref == 'refs/heads/develop' }}
+    if: ${{ github.ref == 'refs/heads/develop' && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     environment: dev
     env:
@@ -82,7 +83,7 @@ jobs:
 
   push-acr-qa:
     name: Push image to ACR (staging → QA)
-    if: ${{ github.ref == 'refs/heads/staging' }}
+    if: ${{ github.ref == 'refs/heads/staging' && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     environment: qa
     env:
@@ -109,7 +110,7 @@ jobs:
 
   push-acr-prd:
     name: Push image to ACR (main → PRD)
-    if: ${{ github.ref == 'refs/heads/main' }}
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     environment: prd
     env:
