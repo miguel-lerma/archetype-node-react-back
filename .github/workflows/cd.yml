@@ -318,3 +318,4 @@ jobs:
       kv_secret_refs: ${{ needs.prd-secrets.outputs.kv_refs }}
 
     secrets: inherit
+
