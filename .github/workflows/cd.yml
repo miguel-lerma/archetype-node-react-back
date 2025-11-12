@@ -83,8 +83,12 @@ jobs:
             exit 0
           fi
 
-          # Leer archivo, ignorar comentarios (#) y líneas vacías
-          KV_REFS=$(grep -v '^#' "$SECRETS_FILE" | grep -v '^[[:space:]]*$' | tr '\n' ' ')
+          # Leer archivo: ignorar comentarios, líneas vacías, y limpiar espacios
+          KV_REFS=$(grep -v '^[[:space:]]*#' "$SECRETS_FILE" | \
+                    grep -v '^[[:space:]]*$' | \
+                    sed 's/#.*$//' | \
+                    sed 's/[[:space:]]*$//' | \
+                    tr '\n' ' ')
 
           echo "kv_refs=${KV_REFS}" >> "$GITHUB_OUTPUT"
 
@@ -182,7 +186,12 @@ jobs:
             exit 0
           fi
 
-          KV_REFS=$(grep -v '^#' "$SECRETS_FILE" | grep -v '^[[:space:]]*$' | tr '\n' ' ')
+          # Leer archivo: ignorar comentarios, líneas vacías, y limpiar espacios
+          KV_REFS=$(grep -v '^[[:space:]]*#' "$SECRETS_FILE" | \
+                    grep -v '^[[:space:]]*$' | \
+                    sed 's/#.*$//' | \
+                    sed 's/[[:space:]]*$//' | \
+                    tr '\n' ' ')
 
           echo "kv_refs=${KV_REFS}" >> "$GITHUB_OUTPUT"
 
@@ -279,7 +288,12 @@ jobs:
             exit 0
           fi
 
-          KV_REFS=$(grep -v '^#' "$SECRETS_FILE" | grep -v '^[[:space:]]*$' | tr '\n' ' ')
+          # Leer archivo: ignorar comentarios, líneas vacías, y limpiar espacios
+          KV_REFS=$(grep -v '^[[:space:]]*#' "$SECRETS_FILE" | \
+                    grep -v '^[[:space:]]*$' | \
+                    sed 's/#.*$//' | \
+                    sed 's/[[:space:]]*$//' | \
+                    tr '\n' ' ')
 
           echo "kv_refs=${KV_REFS}" >> "$GITHUB_OUTPUT"
 
@@ -318,4 +332,3 @@ jobs:
       kv_secret_refs: ${{ needs.prd-secrets.outputs.kv_refs }}
 
     secrets: inherit
-
